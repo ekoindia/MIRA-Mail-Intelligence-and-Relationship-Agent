@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+data/*.db
+uploads/reports/*
+uploads/masters/*
+logs/*.log
+.venv/
+venv/
+*.egg-info/
+.DS_Store
+credentials.json
+data/gmail_token.json
+data/incoming_attachments/*

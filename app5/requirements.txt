@@ -1,0 +1,22 @@
+streamlit==1.38.0
+SQLAlchemy==2.0.32
+psycopg2-binary==2.9.9
+pandas==2.2.2
+openpyxl==3.1.5
+xlrd==2.0.1
+bcrypt==4.2.0
+python-dotenv==1.0.1
+requests==2.32.3
+APScheduler==3.10.4
+plotly==5.23.0
+
+# ---- Incoming email (Gmail API) — additive ----
+google-api-python-client==2.137.0
+google-auth==2.32.0
+google-auth-oauthlib==1.2.1
+
+# ---- REST API backend for the React frontend (web/) — additive ----
+fastapi==0.139.2
+uvicorn[standard]==0.51.0
+python-multipart==0.0.32
+pyjwt==2.13.0

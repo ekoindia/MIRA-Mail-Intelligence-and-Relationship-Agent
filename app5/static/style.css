@@ -1,0 +1,296 @@
+/* ============================================================
+   Reporting Console — Enterprise Design System
+   Structural styles only. Colors come from CSS variables that
+   utils/ui.py injects per-theme (see :root block generated there).
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    color: var(--text-primary);
+}
+
+.stApp {
+    background: var(--bg-canvas);
+}
+
+/* ---- Chrome cleanup ---- */
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
+header[data-testid="stHeader"] { background: transparent; height: 0.5rem; }
+div[data-testid="stDecoration"] { display: none; }
+div.block-container { padding-top: 1.6rem; padding-bottom: 3rem; max-width: 1280px; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 8px; }
+
+/* ---- Typography ---- */
+h1, h2, h3, h4 { color: var(--text-primary); letter-spacing: -0.015em; }
+p, span, label, .stMarkdown { color: var(--text-primary); }
+small, .stCaption, [data-testid="stCaptionContainer"] { color: var(--text-secondary) !important; }
+code { background: var(--bg-subtle); color: var(--accent-strong); border-radius: 5px; padding: 0.1rem 0.35rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.85em; }
+
+/* ---- Sidebar ---- */
+section[data-testid="stSidebar"] {
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border-default);
+}
+section[data-testid="stSidebar"] .block-container { padding-top: 1.2rem; }
+section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] p { color: var(--text-primary); }
+
+.brand-block {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.4rem 0.2rem 1.1rem 0.2rem;
+    border-bottom: 1px solid var(--border-default);
+    margin-bottom: 0.9rem;
+}
+.brand-mark {
+    width: 38px; height: 38px; border-radius: 9px;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 800; font-size: 1.05rem;
+    flex-shrink: 0;
+}
+.brand-name { font-weight: 800; font-size: 0.98rem; line-height: 1.15; color: var(--text-primary); }
+.brand-sub { font-size: 0.72rem; color: var(--text-secondary); margin-top: 0.1rem; }
+
+/* Native Streamlit multipage nav */
+[data-testid="stSidebarNav"] { padding-top: 0; }
+[data-testid="stSidebarNav"] ul { padding-left: 0; }
+[data-testid="stSidebarNav"] li { margin-bottom: 1px; }
+[data-testid="stSidebarNav"] a {
+    border-radius: 8px;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.87rem;
+    font-weight: 500;
+    color: var(--text-secondary) !important;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+[data-testid="stSidebarNav"] a:hover {
+    background: var(--bg-subtle);
+    color: var(--text-primary) !important;
+}
+[data-testid="stSidebarNav"] a[aria-current="page"] {
+    background: var(--accent-soft);
+    color: var(--accent-strong) !important;
+    font-weight: 700;
+}
+
+.sidebar-userbox {
+    margin-top: 0.6rem;
+    padding: 0.75rem 0.8rem;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border-default);
+    border-radius: 10px;
+}
+.sidebar-userbox .u-name { font-weight: 700; font-size: 0.86rem; color: var(--text-primary); }
+.sidebar-userbox .u-role {
+    display: inline-block; margin-top: 0.3rem;
+    font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 0.12rem 0.45rem; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent-strong);
+}
+.sender-chip {
+    margin-top: 0.55rem; padding-top: 0.55rem; border-top: 1px dashed var(--border-default);
+    font-size: 0.74rem; color: var(--text-secondary);
+    display: flex; align-items: center; gap: 0.35rem;
+}
+.sender-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
+
+/* ---- Page header ---- */
+.page-header { margin-bottom: 1.6rem; }
+.page-header .eyebrow {
+    font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--accent-strong); margin-bottom: 0.3rem;
+}
+.page-header h1 {
+    font-size: 1.65rem;
+    font-weight: 800;
+    margin: 0 0 0.2rem 0;
+    display: flex; align-items: center; gap: 0.5rem;
+}
+.page-header p { color: var(--text-secondary); font-size: 0.92rem; margin: 0; }
+.page-header-divider { border: none; border-top: 1px solid var(--border-default); margin: 1rem 0 1.5rem 0; }
+
+/* ---- KPI cards ---- */
+.kpi-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+    padding: 1rem 1.15rem;
+    box-shadow: var(--shadow-sm);
+    transition: box-shadow 0.15s ease, border-color 0.15s ease;
+    height: 100%;
+}
+.kpi-card:hover { box-shadow: var(--shadow-md); border-color: var(--border-strong); }
+.kpi-top { display: flex; align-items: center; justify-content: space-between; }
+.kpi-icon {
+    width: 30px; height: 30px; border-radius: 8px;
+    background: var(--accent-soft); color: var(--accent-strong);
+    display: flex; align-items: center; justify-content: center; font-size: 0.95rem;
+}
+.kpi-label {
+    font-size: 0.74rem; font-weight: 700; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.04em; margin-top: 0.65rem;
+}
+.kpi-value { font-size: 1.55rem; font-weight: 800; color: var(--text-primary); margin-top: 0.1rem; line-height: 1.2; }
+.kpi-delta { font-size: 0.78rem; font-weight: 600; margin-top: 0.3rem; }
+.kpi-delta.up { color: var(--success); }
+.kpi-delta.down { color: var(--danger); }
+.kpi-delta.flat { color: var(--text-secondary); }
+
+/* ---- Section card (generic content container) ---- */
+.section-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+    padding: 1.25rem 1.4rem;
+    margin-bottom: 1rem;
+    box-shadow: var(--shadow-sm);
+}
+.section-card h3, .section-card h4 { margin-top: 0; }
+.section-title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem; }
+.section-title-row h4 { margin: 0; font-size: 1rem; font-weight: 700; }
+
+/* ---- Status badges ---- */
+.badge {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    padding: 0.22rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.76rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.badge .dot { width: 6px; height: 6px; border-radius: 50%; }
+
+/* ---- Buttons ---- */
+.stButton > button {
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.88rem;
+    border: 1px solid var(--border-default);
+    color: var(--text-primary);
+    background: var(--bg-surface);
+    padding: 0.45rem 1rem;
+    transition: all 0.12s ease;
+}
+.stButton > button:hover { border-color: var(--border-strong); background: var(--bg-subtle); }
+.stButton > button[kind="primary"] {
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: #ffffff;
+}
+.stButton > button[kind="primary"]:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+.stDownloadButton > button { border-radius: 8px; font-weight: 600; font-size: 0.85rem; }
+
+/* ---- Inputs ---- */
+.stTextInput input, .stTextArea textarea, .stNumberInput input, .stDateInput input {
+    border-radius: 8px !important;
+    border: 1px solid var(--border-default) !important;
+    background: var(--bg-surface) !important;
+    color: var(--text-primary) !important;
+}
+.stTextInput input:focus, .stTextArea textarea:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 3px var(--accent-soft) !important; }
+div[data-baseweb="select"] > div { border-radius: 8px !important; border-color: var(--border-default) !important; background: var(--bg-surface) !important; }
+.stMultiSelect span[data-baseweb="tag"] { background: var(--accent-soft) !important; color: var(--accent-strong) !important; border-radius: 6px; }
+
+/* ---- Tabs ---- */
+.stTabs [data-baseweb="tab-list"] { gap: 1.4rem; border-bottom: 1px solid var(--border-default); }
+.stTabs [data-baseweb="tab"] {
+    height: auto; padding: 0.5rem 0.1rem;
+    color: var(--text-secondary); font-weight: 600; font-size: 0.9rem;
+}
+.stTabs [aria-selected="true"] { color: var(--accent-strong) !important; }
+.stTabs [data-baseweb="tab-highlight"] { background-color: var(--accent) !important; height: 2.5px; }
+
+/* ---- Expanders / containers with border ---- */
+[data-testid="stExpander"] {
+    border: 1px solid var(--border-default) !important;
+    border-radius: 10px !important;
+    background: var(--bg-surface);
+}
+div[data-testid="stVerticalBlockBorderWrapper"] > div {
+    border-color: var(--border-default) !important;
+    border-radius: 10px !important;
+    background: var(--bg-surface);
+}
+
+/* ---- File uploader ---- */
+[data-testid="stFileUploaderDropzone"] {
+    background: var(--bg-subtle) !important;
+    border: 1.5px dashed var(--border-strong) !important;
+    border-radius: 12px !important;
+}
+
+/* ---- Progress ---- */
+.stProgress > div > div { background: var(--accent) !important; border-radius: 999px; }
+.stProgress > div { background: var(--bg-subtle) !important; border-radius: 999px; }
+
+/* ---- Dataframes / tables ---- */
+[data-testid="stDataFrame"], [data-testid="stTable"] {
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--border-default);
+}
+[data-testid="stMetricValue"] { color: var(--text-primary); }
+[data-testid="stMetricLabel"] { color: var(--text-secondary); }
+
+/* ---- Alerts / toasts ---- */
+div[data-testid="stAlert"] { border-radius: 10px; border-width: 1px; }
+
+/* ---- Login screen ---- */
+.login-shell { min-height: 78vh; display: flex; align-items: center; justify-content: center; }
+.login-card {
+    width: 100%; max-width: 420px;
+    padding: 2.1rem 2.2rem 1.8rem 2.2rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: 16px;
+    box-shadow: var(--shadow-lg);
+}
+.login-mark {
+    width: 46px; height: 46px; border-radius: 11px;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 800; font-size: 1.2rem; margin-bottom: 0.9rem;
+}
+.login-card h2 { font-weight: 800; font-size: 1.35rem; margin: 0 0 0.15rem 0; }
+.login-card .login-org { color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1.4rem; }
+.login-footnote { text-align: center; margin-top: 1rem; font-size: 0.76rem; color: var(--text-secondary); }
+
+/* ---- Empty states ---- */
+.empty-state {
+    text-align: center; padding: 2.6rem 1rem;
+    color: var(--text-secondary);
+    border: 1px dashed var(--border-default);
+    border-radius: 12px;
+    background: var(--bg-subtle);
+}
+.empty-state .icon { font-size: 1.8rem; margin-bottom: 0.5rem; }
+.empty-state .title { font-weight: 700; color: var(--text-primary); margin-bottom: 0.2rem; }
+
+/* ---- Pipeline / step indicator ---- */
+.pipeline { display: flex; align-items: center; gap: 0; margin: 0.4rem 0 1.2rem 0; flex-wrap: wrap; }
+.pipeline-step {
+    display: flex; align-items: center; gap: 0.4rem;
+    font-size: 0.78rem; font-weight: 700; color: var(--text-secondary);
+    padding: 0.35rem 0.7rem; border-radius: 999px; border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+}
+.pipeline-step.done { color: var(--success); border-color: var(--success); background: var(--success-soft); }
+.pipeline-step.active { color: var(--accent-strong); border-color: var(--accent); background: var(--accent-soft); }
+.pipeline-arrow { color: var(--border-strong); margin: 0 0.35rem; font-size: 0.85rem; }
+
+/* ---- Misc ---- */
+hr { border-color: var(--border-default); }
+.divider-tight { margin: 0.6rem 0; border-top: 1px solid var(--border-default); }
+.mono { font-family: 'IBM Plex Mono', monospace; font-size: 0.82rem; }
+.tag-pill {
+    display: inline-block; padding: 0.15rem 0.55rem; margin: 0.1rem 0.2rem 0.1rem 0;
+    border-radius: 6px; font-size: 0.75rem; font-weight: 600;
+    background: var(--bg-subtle); border: 1px solid var(--border-default); color: var(--text-primary);
+}
