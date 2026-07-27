@@ -3,3 +3,13 @@ __pycache__/
 *.pyc
 .env
 .claude/
+
+# Logs
+*.log
+
+# Temp / Review outputs
+_review_data.json
+Report_Templates_Review.docx
+
+# Child repositories/directories we don't want to track
+sbi_email_automation/

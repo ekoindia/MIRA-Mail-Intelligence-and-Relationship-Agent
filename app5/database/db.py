@@ -132,6 +132,9 @@ def _run_lightweight_migrations() -> None:
         ("report_masters", "delivery_mode", "VARCHAR(10)"),
         ("email_logs", "cc_emails", "VARCHAR(2000)"),
         ("org_units", "cc_emails", "VARCHAR(2000)"),
+        ("email_logs", "tracking_token", "VARCHAR(64)"),
+        ("email_logs", "opened_at", "DATETIME"),
+        ("email_logs", "open_count", "INTEGER"),
     ]
 
     with engine.begin() as conn:
@@ -142,6 +145,11 @@ def _run_lightweight_migrations() -> None:
             if column not in existing_cols:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
                 logger.info("Migration: added %s.%s", table, column)
+
+        if "email_logs" in existing_tables:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_email_logs_tracking_token ON email_logs (tracking_token)"
+            ))
 
 
 def _drop_stale_empty_tables() -> None:

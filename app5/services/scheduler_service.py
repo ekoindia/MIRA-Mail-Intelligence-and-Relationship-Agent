@@ -41,7 +41,14 @@ def get_scheduler() -> BackgroundScheduler:
             check_and_run_due_auto_schedules, "interval", minutes=1,
             id="auto_distribution_poller", replace_existing=True,
         )
-        logger.info("Scheduler started with 1-minute pollers (manual + auto-distribution).")
+
+        from services.autosend_service import check_and_run_daily_autosend
+
+        _scheduler.add_job(
+            check_and_run_daily_autosend, "interval", minutes=1,
+            id="daily_autosend_poller", replace_existing=True,
+        )
+        logger.info("Scheduler started with 1-minute pollers (manual + auto-distribution + daily autosend).")
     return _scheduler
 
 

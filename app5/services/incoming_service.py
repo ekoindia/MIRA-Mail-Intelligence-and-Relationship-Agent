@@ -245,6 +245,32 @@ def get_incoming_by_lho() -> list[dict]:
     return [{"LHO": k, "Incoming Emails": v} for k, v in rows.items()]
 
 
+# Which IncomingEmail column identifies "which unit" for a given level —
+# only LHO and RBO are actually resolved to a specific name by the incoming
+# classifier (see services/gmail_service.classify); AO/Branch/Corporate
+# Center aren't, so those levels fall back to a single "Unclassified" bucket.
+_INCOMING_NAME_COLUMN = {"LHO": IncomingEmail.lho_name, "RBO": IncomingEmail.rbo_name}
+
+
+def get_incoming_by_level(level: str) -> list[dict]:
+    """Per-unit incoming counts for any org level (LHO/RBO/AO/Branch/Corporate Center)."""
+    from sqlalchemy import func
+
+    name_col = _INCOMING_NAME_COLUMN.get(level)
+    with get_db() as db:
+        if name_col is not None:
+            rows = (
+                db.query(name_col, func.count(IncomingEmail.id))
+                .filter(IncomingEmail.level == level, name_col.isnot(None))
+                .group_by(name_col)
+                .all()
+            )
+            return [{"name": name, "incoming": cnt} for name, cnt in rows]
+
+        total = db.query(IncomingEmail).filter(IncomingEmail.level == level).count()
+        return [{"name": "Unclassified", "incoming": total}] if total else []
+
+
 def get_recent_incoming(limit: int = 15) -> list[dict]:
     with get_db() as db:
         rows = (

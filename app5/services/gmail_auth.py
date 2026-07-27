@@ -45,6 +45,10 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/spreadsheets.readonly",
+    # Read-only enough to fetch the connected account's own configured
+    # signature (Settings > Signature in Gmail) so every automated email
+    # can end with the sender's real signature instead of a hardcoded one.
+    "https://www.googleapis.com/auth/gmail.settings.basic",
 ]
 
 

@@ -41,6 +41,12 @@ class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
     secret_key: str = os.getenv("SECRET_KEY", "dev-secret-key")
     session_timeout_minutes: int = _int("SESSION_TIMEOUT_MINUTES", 60)
+    # Publicly reachable base URL for this backend (e.g. https://reports.yourcompany.com),
+    # no trailing slash. Required for the email-open tracking pixel — recipients'
+    # mail clients fetch it, so localhost/127.0.0.1 will never work here. Empty
+    # (the default, e.g. while running only on localhost) disables pixel injection
+    # entirely rather than embedding a dead URL in every sent email.
+    public_base_url: str = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
     # Database
     db_engine: str = os.getenv("DB_ENGINE", "sqlite")
@@ -78,6 +84,23 @@ class Settings:
     default_batch_size: int = _int("DEFAULT_BATCH_SIZE", 25)
     default_max_retries: int = _int("DEFAULT_MAX_RETRIES", 3)
     retry_backoff_seconds: int = _int("RETRY_BACKOFF_SECONDS", 30)
+
+    # Send pacing (anti-throttling): emails go out in small batches with a
+    # randomized pause between batches, rather than back-to-back, to look
+    # less like a mass-mailing burst to Gmail's abuse detection.
+    email_batch_size: int = _int("EMAIL_BATCH_SIZE", 3)
+    email_pace_min_seconds: int = _int("EMAIL_PACE_MIN_SECONDS", 25)
+    email_pace_max_seconds: int = _int("EMAIL_PACE_MAX_SECONDS", 31)
+
+    # Daily automated fetch -> freshness-check -> send cycle for the
+    # calling-sheet-driven reports. Off by default — this is a *standing*
+    # automated behavior (real sends firing every day with no manual click,
+    # subject to each report's existing Draft Only / Send Directly setting),
+    # so it must be turned on deliberately once the operator is ready.
+    autosend_enabled: bool = _bool("AUTOSEND_ENABLED", "false")
+    autosend_fetch_time: str = os.getenv("AUTOSEND_FETCH_TIME", "10:15")
+    autosend_send_time: str = os.getenv("AUTOSEND_SEND_TIME", "10:30")
+    autosend_recheck_minutes: int = _int("AUTOSEND_RECHECK_MINUTES", 60)
 
     # Default admin bootstrap
     default_admin_username: str = os.getenv("DEFAULT_ADMIN_USERNAME", "admin")

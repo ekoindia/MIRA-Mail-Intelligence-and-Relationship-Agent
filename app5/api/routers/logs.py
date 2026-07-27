@@ -6,6 +6,7 @@ from api.auth import get_current_user
 from database.db import get_db
 from database.models import AuditLog, EmailLog
 from services.audit_service import get_audit_logs
+from utils.helpers import utc_iso
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 
@@ -58,7 +59,7 @@ def delivery_logs(status: str | None = None, limit: int = 200, user: dict = Depe
                 "recipientType": r.recipient_type, "report": r.job.upload.report_master.report_name
                 if r.job and r.job.upload else "-",
                 "status": r.status.value, "channel": r.sent_via, "attempts": r.attempt_count,
-                "sentAt": r.sent_at.isoformat() if r.sent_at else None, "error": r.last_error,
+                "sentAt": utc_iso(r.sent_at), "error": r.last_error,
             }
             for r in rows
         ]
@@ -71,7 +72,7 @@ def audit_logs(limit: int = 200, user: dict = Depends(get_current_user)):
         return [
             {
                 "id": r.id, "summary": _humanize(r), "action": r.action,
-                "username": r.username, "createdAt": r.created_at.isoformat(),
+                "username": r.username, "createdAt": utc_iso(r.created_at),
             }
             for r in rows
         ]

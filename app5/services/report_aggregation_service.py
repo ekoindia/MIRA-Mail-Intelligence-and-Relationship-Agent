@@ -60,29 +60,63 @@ _SLAB_AMOUNT_RE = re.compile(r"₹\s*([\d,]+)")
 _SCORE_BANDS = (("A", 8), ("B", 4), ("C", 0))  # else "D"
 
 
-def filter_for_recipient(df: pd.DataFrame, org_level: str, org_unit_name: str) -> pd.DataFrame:
+_RECIPIENT_EMAIL_COLUMN = {
+    OrgLevel.AO: "ao_email",
+    OrgLevel.RBO: "rbo_email",
+    OrgLevel.LHO: "lho_email",
+    OrgLevel.BRANCH: "branch_email",
+}
+
+
+def filter_for_recipient(
+    df: pd.DataFrame, org_level: str, org_unit_name: str, org_unit_email: str | None = None,
+) -> pd.DataFrame:
     """
     Return only the rows belonging to a given recipient. Corporate Center
     gets the whole sheet (no filter); every other level filters on its own
     column.
+
+    When org_unit_email is available, it is the ONLY filter applied — email
+    is this recipient's true identity, name is just a display label that
+    can be inconsistent. Two real cases this has to handle correctly:
+      - One name, multiple emails (e.g. RBO "5" splits into two different
+        officers for two different branch clusters, both sharing the name
+        "5"): filtering by name alone would give both officers the same
+        combined data. Email-only filtering correctly separates them.
+      - One email, multiple names (e.g. the same real inbox is entered as
+        RBO "2" for one stray row and RBO "3" for the other 23 — confirmed
+        live in the calling sheet): filtering by name AND email would
+        silently drop whichever rows carry the "other" name label, even
+        though they belong to the same recipient. Email-only filtering
+        correctly includes all of them.
+    Name-based filtering is only a fallback for recipients with no known
+    email (e.g. some manually-configured org recipients).
     """
     level = OrgLevel(org_level) if not isinstance(org_level, OrgLevel) else org_level
-    name_cf = (org_unit_name or "").strip().casefold()
 
     if level == OrgLevel.CORP:
         return df
+
+    email_col = _RECIPIENT_EMAIL_COLUMN.get(level)
+    if org_unit_email and email_col:
+        email_cf = org_unit_email.strip().casefold()
+        return df[df[email_col].astype(str).str.strip().str.casefold() == email_cf]
+
+    name_cf = (org_unit_name or "").strip().casefold()
     if level == OrgLevel.AO:
-        return df[df["ao"].astype(str).str.strip().str.casefold() == name_cf]
-    if level == OrgLevel.RBO:
-        return df[df["rbo"].astype(str).str.strip().str.casefold() == name_cf]
-    if level == OrgLevel.LHO:
-        return df[df["lho"].astype(str).str.strip().str.casefold() == name_cf]
-    if level == OrgLevel.BRANCH:
-        return df[
+        result = df[df["ao"].astype(str).str.strip().str.casefold() == name_cf]
+    elif level == OrgLevel.RBO:
+        result = df[df["rbo"].astype(str).str.strip().str.casefold() == name_cf]
+    elif level == OrgLevel.LHO:
+        result = df[df["lho"].astype(str).str.strip().str.casefold() == name_cf]
+    elif level == OrgLevel.BRANCH:
+        result = df[
             (df["branch_name"].astype(str).str.strip().str.casefold() == name_cf)
             | (df["branch_code"].astype(str).str.strip() == (org_unit_name or "").strip())
         ]
-    raise ValueError(f"Unknown org level: {org_level}")
+    else:
+        raise ValueError(f"Unknown org level: {org_level}")
+    return result
 
 
 def _pct(achieved: float, target: float) -> float:
@@ -142,6 +176,15 @@ def aggregate_sss(df: pd.DataFrame) -> dict:
         "PMJJBY_MTD": int(df["mtd_pmjjby"].sum()),
         "PMSBY_MTD": int(df["mtd_pmsby"].sum()),
         "APY_MTD": int(df["mtd_apy"].sum()),
+        "PMJJBY_FTD": int(df["ftd_pmjjby"].sum()),
+        "PMSBY_FTD": int(df["ftd_pmsby"].sum()),
+        "APY_FTD": int(df["ftd_apy"].sum()),
+        "PMJJBY_Target": int(df["target_pmjjby"].sum()),
+        "PMSBY_Target": int(df["target_pmsby"].sum()),
+        "APY_Target": int(df["target_apy"].sum()),
+        "PMJJBY_Percent": _pct(int(df["mtd_pmjjby"].sum()), int(df["target_pmjjby"].sum())),
+        "PMSBY_Percent": _pct(int(df["mtd_pmsby"].sum()), int(df["target_pmsby"].sum())),
+        "APY_Percent": _pct(int(df["mtd_apy"].sum()), int(df["target_apy"].sum())),
         "CSP_Count": len(df),
         # Generic keys for "Daily RBO Update" / "Weekly Consolidated RBO/LHO".
         # "%" is embedded in the value itself (not hardcoded in the template)
@@ -182,6 +225,30 @@ def aggregate_account_opening(df: pd.DataFrame) -> dict:
         "Level_Breakdown": f"{len(df)} CSP(s) in scope",
         "Top_Bottom_Performers": f"Top: {top_str} | Needing follow-up: {bottom_str}",
     }
+
+
+def aggregate_account_opening_and_sss(df: pd.DataFrame) -> dict:
+    """
+    Account Opening and Social Security Scheme now go out as ONE email per
+    recipient instead of two separate ones (per user instruction) — this
+    computes both and namespaces every generic template key with AO_/SSS_
+    so a single template body can show two clearly labeled sections.
+    Used only by the "Account Opening" ReportMaster rows; "Social Security
+    Scheme" rows no longer send their own email — see
+    MERGED_INTO_OTHER_REPORT below.
+    """
+    ao = aggregate_account_opening(df)
+    sss = aggregate_sss(df)
+
+    merged = {
+        # Overrides the default {{Report_Name}} (which would otherwise just
+        # say "Account Opening") in both the subject and body opening line.
+        "Report_Name": "Account Opening & Social Security Scheme",
+        "CSP_Count": len(df),
+    }
+    merged.update({f"AO_{key}": value for key, value in ao.items()})
+    merged.update({f"SSS_{key}": value for key, value in sss.items()})
+    return merged
 
 
 def inactive_csps_only(df: pd.DataFrame) -> pd.DataFrame:
@@ -345,45 +412,71 @@ def aggregate_csp_income_impact(df: pd.DataFrame) -> dict:
 # docx. Daily/Weekly variants of the same metric share one aggregator —
 # frequency only affects when the schedule fires, not how the numbers for
 # that recipient are computed.
+#
+# "Social Security Scheme" is deliberately absent — it's merged into the
+# "Account Opening" send (see aggregate_account_opening_and_sss and
+# MERGED_INTO_OTHER_REPORT below), not sent as its own email anymore.
 AGGREGATORS = {
-    "Social Security Scheme (Daily)": aggregate_sss,
-    "Social Security Scheme (Weekly)": aggregate_sss,
-    "Account Opening (Daily)": aggregate_account_opening,
-    "Account Opening (Weekly)": aggregate_account_opening,
+    "Account Opening (Daily)": aggregate_account_opening_and_sss,
+    "Account Opening (Weekly)": aggregate_account_opening_and_sss,
     "Inactive CSPs (Weekly)": aggregate_inactive_csps,
     "Loan Lead Generation (Weekly)": aggregate_loan_lead_generation,
     "DFS Incentive Slab (Monthly)": aggregate_dfs_incentive_slab,
     "CSP Income Impact (Monthly)": aggregate_csp_income_impact,
 }
 
+# Reports that must NEVER send/draft their own separate email — they're
+# folded into another report's single combined email instead. Checked by
+# services/report_send_service.send_report_now before any fetch/send work,
+# same as NOT_YET_AUTOMATED_REPORTS below, just for a different reason
+# ("sent together with X" rather than "not ready yet").
+MERGED_INTO_OTHER_REPORT = {
+    "Social Security Scheme (Daily)": "Account Opening (Daily)",
+    "Social Security Scheme (Weekly)": "Account Opening (Weekly)",
+}
+
 # Reports intentionally NOT in AGGREGATORS (data gaps, flagged to the user
 # rather than fabricated):
-#   "Re-KYC & Inoperative Accounts (Daily)"   -> only free-text promise columns, no numeric completed count
-#   "Re-KYC & Inoperative Accounts (Weekly)"  -> same
 #   "Inputs for Month-on-Month Growth (Monthly)" -> no new-CSP-addition/migration column
 # Skipped entirely per user confirmation (no matching columns at all):
 #   "Server Issue (Weekly)"
 #   "CSP Physical Camp (Weekly)"
 
-# Every generic {{Variable}} the 6 automated templates reference (see
-# upgrade_templates.py), defaulted to "No data available". Templates 1
-# ("Daily RBO Update") and 4 ("Weekly Consolidated RBO/LHO") are each
-# shared with Re-KYC & Inoperative Accounts, which has NO aggregator above
-# — without this, its emails would show the raw, unrendered "{{Variable}}"
-# text instead of a real value. email_service.run_distribution_job seeds
-# every recipient's context with these defaults before applying whatever
-# real values that report's aggregator computed, so a report with no
-# aggregator still sends a clean, honest email instead of a broken one.
+# Reports whose EMAIL TEMPLATE still has the original "[ ]" manual-fill
+# placeholders (see upgrade_templates.py's NOT_YET_AUTOMATED) — never send
+# or draft these automatically, even if a stale ReportUpload/demo file
+# happens to exist for them (e.g. leftover fake sample files from early
+# testing), since the email body would go out with literal unfilled "[ ]"
+# text.
+#
+# Re-KYC & Inoperative Accounts is ALSO here now, per explicit user
+# instruction to put it on hold — it has no aggregator (only free-text
+# promise columns, no numeric completed count) and previously fell back to
+# an honest "No data available" render via TEMPLATE_VARIABLE_DEFAULTS, but
+# the user wants it fully paused rather than sent with that fallback text.
+NOT_YET_AUTOMATED_REPORTS = (
+    "Server Issue (Weekly)",
+    "CSP Physical Camp (Weekly)",
+    "Inputs for Month-on-Month Growth (Monthly)",
+    "Re-KYC & Inoperative Accounts (Daily)",
+    "Re-KYC & Inoperative Accounts (Weekly)",
+)
+
+# Every generic {{Variable}} a template can reference where the report
+# behind it might not have a full aggregator. email_service.run_distribution_job
+# seeds every recipient's context with these defaults before applying
+# whatever real values that report's aggregator computed, so a report
+# without one still sends a clean, honest email instead of a broken one
+# with raw, unrendered "{{Variable}}" text.
+#
+# The old single-block Daily RBO Update / Weekly Consolidated RBO/LHO
+# generic keys (Target_Achievement_Percent, MTD_FTD_Achievement, ...) were
+# removed from here — those templates now only ever render for the merged
+# Account Opening & SSS report (aggregate_account_opening_and_sss always
+# supplies its AO_/SSS_-prefixed keys), and Re-KYC, which used to need
+# these as a fallback, is now in NOT_YET_AUTOMATED_REPORTS and never
+# reaches template rendering at all.
 TEMPLATE_VARIABLE_DEFAULTS = {
-    "Target_Achievement_Percent": "No data available",
-    "MTD_FTD_Achievement": "No data available",
-    "Top_Performers": "No data available",
-    "Followup_CSPs": "No data available",
-    "Weekly_Total": "No data available",
-    "WoW_Change_Percent": "No data available",
-    "MTD_Cumulative": "No data available",
-    "Level_Breakdown": "No data available",
-    "Top_Bottom_Performers": "No data available",
     "Leads_Generated": "No data available",
     "Leads_Converted": "No data available",
     "Lead_Type": "No data available",

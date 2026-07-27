@@ -6,6 +6,20 @@ from datetime import datetime, timedelta
 
 TEMPLATE_VAR_PATTERN = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 
+
+def utc_iso(dt: datetime | None) -> str | None:
+    """
+    ISO-8601 string for a naive UTC datetime (everywhere in this app,
+    timestamps are stored via datetime.utcnow(), which has no tzinfo),
+    WITH an explicit "Z" suffix. Without this, dt.isoformat() alone
+    produces a string with no timezone marker at all — browsers then parse
+    it as *local* time instead of UTC, silently shifting every displayed
+    timestamp by the browser's UTC offset (e.g. 5.5 hours off for IST).
+    """
+    if dt is None:
+        return None
+    return dt.isoformat() + "Z"
+
 SUPPORTED_TEMPLATE_VARS = [
     "Recipient_Name",
     "Branch_Name",
@@ -35,8 +49,25 @@ def render_template(text: str, context: dict[str, str]) -> str:
     return TEMPLATE_VAR_PATTERN.sub(_sub, text or "")
 
 
+def render_email_body(text: str, context: dict[str, str]) -> str:
+    """Same variable substitution as render_template, plus turning plain
+    line breaks into visible line breaks in the sent email. Lets a
+    template's body be authored as normal text (press Enter for a new
+    line) without knowing any HTML — while any HTML you DO write (e.g. a
+    <table> for a scheme achievement grid) still renders as a real table,
+    since only literal newline characters are touched, not markup."""
+    return render_template(text, context).replace("\n", "<br>\n")
+
+
 def today_str(fmt: str = "%d-%b-%Y") -> str:
     return datetime.now().strftime(fmt)
+
+
+def previous_date_str(now: datetime | None = None, fmt: str = "%d-%b-%Y") -> str:
+    """Yesterday relative to `now` — the daily report is fetched/sent this
+    morning but reports on the previous day's completed figures."""
+    now = now or datetime.now()
+    return (now - timedelta(days=1)).strftime(fmt)
 
 
 def week_number_str(now: datetime | None = None) -> str:

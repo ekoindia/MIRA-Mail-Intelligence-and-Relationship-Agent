@@ -361,6 +361,26 @@ def create_ack_draft(service, to_email: str, subject: str, body_text: str,
 # services/email_service.py for automated report distribution via the
 # connected Gmail account.
 # ----------------------------------------------------------------------
+def get_default_signature(service) -> str:
+    """
+    The connected account's own configured signature (Gmail Settings >
+    General > Signature), fetched via the Send-As settings API. Returns ""
+    if unavailable (missing scope, no signature configured, API error) —
+    callers should treat that as "no signature to append", not an error.
+    """
+    try:
+        resp = service.users().settings().sendAs().list(userId=GMAIL_USER_ID).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not fetch Gmail signature: %s", exc)
+        return ""
+
+    send_as_list = resp.get("sendAs", [])
+    match = next((s for s in send_as_list if s.get("isDefault")), None) or (
+        send_as_list[0] if send_as_list else None
+    )
+    return (match or {}).get("signature") or ""
+
+
 def build_mime_message(
     to_email: str, subject: str, body_html: str, attachment_path: str | None = None,
     cc_emails: str | None = None,

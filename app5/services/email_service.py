@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import base64
 import json
+import random
+import secrets
 import smtplib
 import time
 from datetime import datetime
@@ -33,8 +35,11 @@ from services.audit_service import log_action
 from services.report_aggregation_service import TEMPLATE_VARIABLE_DEFAULTS
 from utils.helpers import (
     month_year_str,
+    previous_date_str,
+    render_email_body,
     render_template,
     today_str,
+    utc_iso,
     week_end_str,
     week_number_str,
     week_start_str,
@@ -51,6 +56,18 @@ _graph_token_cache: dict[str, tuple[str, float]] = {}
 
 class EmailSendError(Exception):
     pass
+
+
+def _inject_tracking_pixel(body_html: str, token: str) -> str:
+    """Append an invisible 1x1 image whose fetch, by the recipient's mail
+    client, is how we detect an "open" (see GET /api/track/{token}.png in
+    api/routers/tracking.py). No-op if PUBLIC_BASE_URL isn't configured —
+    embedding a localhost URL would never be reachable by a real recipient.
+    """
+    if not settings.public_base_url:
+        return body_html
+    pixel_url = f"{settings.public_base_url}/api/track/{token}.png"
+    return f'{body_html}<img src="{pixel_url}" width="1" height="1" alt="" style="display:none" />'
 
 
 # ----------------------------------------------------------------------
@@ -148,14 +165,18 @@ def _send_via_smtp(to_email: str, subject: str, body_html: str, attachment_path:
 # ----------------------------------------------------------------------
 # Gmail (primary channel when connected)
 # ----------------------------------------------------------------------
-def get_gmail_send_context() -> tuple[object | None, str]:
+def get_gmail_send_context() -> tuple[object | None, str, str]:
     """
-    Resolve the Gmail client + send mode ONCE per batch (not per email —
-    building the API client and checking the token has real overhead).
-    Returns (client_or_None, send_mode). send_mode is "direct_send" or
-    "draft_only" (from the AppSetting saved in Settings -> Gmail Connection).
+    Resolve the Gmail client + send mode + signature ONCE per batch (not
+    per email — building the API client, checking the token, and fetching
+    the signature all have real overhead). Returns (client_or_None,
+    send_mode, signature_html). send_mode is "direct_send" or "draft_only"
+    (from the AppSetting saved in Settings -> Gmail Connection).
+    signature_html is the connected account's own Gmail signature (Settings
+    > Signature), appended to every automated email in place of a
+    hardcoded one — "" if unavailable.
     """
-    from services import gmail_auth
+    from services import gmail_auth, gmail_service
 
     try:
         client = gmail_auth.get_gmail_client(interactive=False)
@@ -169,7 +190,9 @@ def get_gmail_send_context() -> tuple[object | None, str]:
         if row and row.value:
             send_mode = row.value
 
-    return client, send_mode
+    signature = gmail_service.get_default_signature(client) if client is not None else ""
+
+    return client, send_mode, signature
 
 
 def _send_via_gmail(gmail_client, to_email: str, subject: str, body_html: str,
@@ -221,12 +244,21 @@ def run_distribution_job(
     batch_size: int | None = None,
     max_retries: int | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
+    force_draft: bool = False,
 ) -> DistributionJob:
     """
     Send all PENDING/RETRYING EmailLog rows for a job in batches.
     `progress_callback(done, total)` is invoked after each email for UI progress bars.
+    `force_draft=True` always creates Gmail drafts for this run regardless
+    of the report's stored Draft Only / Send Directly setting — used by the
+    per-report "Test (Draft)" button, which must never actually send
+    real mail no matter what the report is currently configured to do.
     """
-    batch_size = batch_size or settings.default_batch_size
+    # Default batch size is the small anti-throttling pacing size (see the
+    # sleep below), not the old bulk default_batch_size — callers that want
+    # a bigger batch (e.g. a bulk one-off resend) can still pass batch_size
+    # explicitly.
+    batch_size = batch_size or settings.email_batch_size
     max_retries = max_retries or settings.default_max_retries
 
     job = db.query(DistributionJob).get(job_id)
@@ -252,16 +284,19 @@ def run_distribution_job(
     job.started_at = datetime.utcnow()
     db.flush()
 
-    gmail_client, _ = get_gmail_send_context()
+    gmail_client, _, gmail_signature = get_gmail_send_context()
     # Per-report Draft Only / Send Directly choice (Reports page) is the
     # source of truth. Unset (never configured) defaults to draft_only —
     # NOT the legacy account-wide AppSetting, which can be left on
     # "direct_send" from old testing and would otherwise let an
     # unconfigured report send for real without anyone choosing that.
-    report_delivery_mode = upload.report_master.delivery_mode
-    gmail_send_mode = {"draft": "draft_only", "send": "direct_send"}.get(
-        report_delivery_mode, "draft_only"
-    )
+    if force_draft:
+        gmail_send_mode = "draft_only"
+    else:
+        report_delivery_mode = upload.report_master.delivery_mode
+        gmail_send_mode = {"draft": "draft_only", "send": "direct_send"}.get(
+            report_delivery_mode, "draft_only"
+        )
 
     total = len(pending_logs)
     done = 0
@@ -280,6 +315,7 @@ def run_distribution_job(
         **TEMPLATE_VARIABLE_DEFAULTS,
         "Report_Name": upload.report_master.report_name,
         "Date": today_str(),
+        "Previous_Date": previous_date_str(now),
         "Week_Number": week_number_str(now),
         "Week_Start": week_start_str(now),
         "Week_End": week_end_str(now),
@@ -303,7 +339,15 @@ def run_distribution_job(
                 # figures) override the generic context on a per-recipient basis.
                 context.update(json.loads(log_row.context_override_json))
             subject = render_template(subject_tpl, context)
-            body = render_template(body_tpl, context)
+            body = render_email_body(body_tpl, context)
+            if gmail_signature:
+                # The template's own closing (e.g. "Regards, ...") is gone —
+                # every automated email now ends with the connected
+                # account's real Gmail signature instead of a hardcoded one.
+                body += gmail_signature
+            if not log_row.tracking_token:
+                log_row.tracking_token = secrets.token_urlsafe(16)
+            body = _inject_tracking_pixel(body, log_row.tracking_token)
             # "" is an explicit "no attachment" marker (segmented_distribution_service
             # uses it — the filled-in template body is the whole report, no
             # Excel file), distinct from NULL/unset which falls back to the
@@ -353,6 +397,14 @@ def run_distribution_job(
             db.flush()
             if progress_callback:
                 progress_callback(done, total)
+
+        # Pace batches with a randomized pause (not a fixed interval) so the
+        # send pattern doesn't look like an automated burst to Gmail's abuse
+        # detection. Skipped after the very last batch — nothing left to wait for.
+        if i + batch_size < total:
+            pause = random.randint(settings.email_pace_min_seconds, settings.email_pace_max_seconds)
+            logger.info("Pacing: waiting %ss before the next batch of %s emails.", pause, batch_size)
+            time.sleep(pause)
 
     job.completed_at = datetime.utcnow()
     job.status = JobStatus.COMPLETED if job.failed_count == 0 else JobStatus.COMPLETED_WITH_ERRORS
@@ -411,25 +463,41 @@ def get_outgoing_kpis() -> dict:
         return {"total_outgoing": total_sent, "outgoing_today": today_sent, "outgoing_failed": failed}
 
 
-def get_outgoing_by_lho() -> list[dict]:
+def get_outgoing_by_lho(since: datetime | None = None) -> list[dict]:
     """Per-LHO outgoing (sent) counts. Only recipients resolved at LHO level carry lho_name."""
     from sqlalchemy import func
     with get_db() as db:
-        rows = (
-            db.query(EmailLog.lho_name, func.count(EmailLog.id))
-            .filter(EmailLog.status == EmailStatus.SENT, EmailLog.lho_name.isnot(None))
-            .group_by(EmailLog.lho_name)
-            .all()
+        q = db.query(EmailLog.lho_name, func.count(EmailLog.id)).filter(
+            EmailLog.status == EmailStatus.SENT, EmailLog.lho_name.isnot(None),
         )
+        if since:
+            q = q.filter(EmailLog.sent_at >= since)
+        rows = q.group_by(EmailLog.lho_name).all()
     return [{"LHO": name, "Outgoing Emails": cnt} for name, cnt in rows]
 
 
-def get_recent_outgoing(limit: int = 15) -> list[dict]:
+def get_outgoing_by_level(level: str, since: datetime | None = None) -> list[dict]:
+    """Per-unit outgoing (sent) counts for any org level (LHO/RBO/AO/Branch/Corporate Center)."""
+    from sqlalchemy import func
     with get_db() as db:
-        rows = db.query(EmailLog).order_by(EmailLog.created_at.desc()).limit(limit).all()
+        q = db.query(EmailLog.recipient_name, func.count(EmailLog.id)).filter(
+            EmailLog.status == EmailStatus.SENT, EmailLog.recipient_type == level,
+        )
+        if since:
+            q = q.filter(EmailLog.sent_at >= since)
+        rows = q.group_by(EmailLog.recipient_name).all()
+    return [{"name": name, "outgoing": cnt} for name, cnt in rows]
+
+
+def get_recent_outgoing(limit: int = 15, since: datetime | None = None) -> list[dict]:
+    with get_db() as db:
+        q = db.query(EmailLog)
+        if since:
+            q = q.filter(EmailLog.created_at >= since)
+        rows = q.order_by(EmailLog.created_at.desc()).limit(limit).all()
         return [
             {
-                "Timestamp": r.sent_at or r.created_at,
+                "Timestamp": utc_iso(r.sent_at or r.created_at),
                 "Recipient": r.recipient_name,
                 "Email": r.recipient_email,
                 "LHO": r.lho_name or "—",

@@ -214,6 +214,14 @@ class EmailLog(Base):
     # Center's fixed CC list). NULL/empty = no CC.
     cc_emails = Column(String(2000), nullable=True)
 
+    # Open tracking: a random per-email token embedded in an invisible
+    # pixel in the rendered body (see services/email_service.py). NULL
+    # until the email is actually sent (token is generated at send time,
+    # not at EmailLog creation, so unsent/failed rows never get one).
+    tracking_token = Column(String(64), nullable=True, index=True)
+    opened_at = Column(DateTime, nullable=True)
+    open_count = Column(Integer, default=0)
+
     job = relationship("DistributionJob", back_populates="email_logs")
 
 

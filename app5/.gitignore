@@ -4,6 +4,7 @@ __pycache__/
 data/*.db
 uploads/reports/*
 uploads/masters/*
+uploads/reports_auto/*
 logs/*.log
 .venv/
 venv/

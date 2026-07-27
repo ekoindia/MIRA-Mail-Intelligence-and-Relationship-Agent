@@ -190,6 +190,7 @@ def _resolve_columns(header: _HeaderIndex) -> dict:
         "lho_email": "LHO mail ID",
         "rbo_email": "RBO Email",
         "ao_email": "AO Email ID",
+        "dc_email": "Email ID DC",
     }.items():
         matches = header.field_indices(field=field)
         col[key] = matches[0] if matches else None
@@ -345,35 +346,80 @@ _SHEET_RECIPIENT_COLUMNS = {
     "AO": ("ao", "ao_email"),
 }
 
+# Per-level CC source(s): LHO mail always CCs that circle's head; Branch
+# mail always CCs that branch's District Coordinator; RBO mail (Daily
+# reports) CCs both that RBO's circle head AND its district coordinator(s).
+# Verified against the live sheet (2026-07-20): Circle Head Email is 100%
+# consistent within an LHO; DC Email is consistent for 375/377 branches
+# (the exceptions are handled by taking the most common non-blank value per
+# group below, rather than picking an arbitrary row). AO has no per-unit CC
+# source in the sheet, so it isn't listed here.
+_SHEET_CC_COLUMNS: dict[str, tuple[str, ...]] = {
+    "LHO": ("circle_head_email",),
+    "Branch": ("dc_email",),
+    "RBO": ("circle_head_email", "dc_email"),
+}
+
 
 def resolve_sheet_recipients(df: pd.DataFrame, level: str) -> list[dict]:
     """
     Recipient list derived directly from the Calling Sheet's own per-row
     mail-ID columns ("LHO mail ID", "Branch Email") — no manually-maintained
-    list needed for these two levels. Returns
-    [{"name": ..., "email": ..., "level": ...}], de-duplicated by name.
+    list needed for these levels. Returns
+    [{"name": ..., "email": ..., "level": ..., "cc_email": ... | None}],
+    de-duplicated by name.
     """
     cols = _SHEET_RECIPIENT_COLUMNS.get(level)
     if cols is None:
         return []
     name_col, email_col = cols
+    cc_cols = _SHEET_CC_COLUMNS.get(level, ())
 
-    sub = df[[name_col, email_col]].copy()
+    keep_cols = [name_col, email_col] + [c for c in cc_cols if c not in (name_col, email_col)]
+    sub = df[keep_cols].copy()
     sub[name_col] = sub[name_col].astype(str).str.strip()
     sub[email_col] = sub[email_col].astype(str).str.strip()
     sub = sub[(sub[name_col] != "") & sub[email_col].str.contains("@", regex=False)]
 
-    # De-dupe case-insensitively — the sheet has inconsistent casing for the
-    # same LHO ("Maharashtra" vs "maharashtra"), which would otherwise
-    # register as two recipients and double-send the same report to the
-    # same inbox. Keep the first-seen casing as the display name; the
-    # filter that later re-selects this recipient's rows (filter_for_recipient)
-    # already compares case-insensitively, so this doesn't affect matching.
-    seen: dict[str, dict] = {}
-    for name, email in sub.itertuples(index=False):
-        key = name.casefold()
+    # Most common non-blank CC value(s) per group — grouped by EMAIL, not
+    # name: RBO names in this sheet are bare per-circle numbers ("3", "5")
+    # reused independently across different circles, so two entirely
+    # different real RBOs can share a name — grouping CC lookup by name
+    # would silently mix one RBO's circle-head/DC email onto the other's
+    # mail. Email is this recipient's true identity (same principle as
+    # report_aggregation_service.filter_for_recipient). A stray blank/
+    # inconsistent row shouldn't drop or corrupt the CC for the whole unit,
+    # hence taking the most common non-blank value per column.
+    cc_by_email: dict[str, str] = {}
+    if cc_cols:
+        for key, grp in sub.groupby(sub[email_col].str.casefold()):
+            parts: list[str] = []
+            for cc_col in cc_cols:
+                cc_clean = grp[cc_col].astype(str).str.strip()
+                valid = cc_clean[cc_clean.str.contains("@", regex=False)]
+                if not valid.empty:
+                    parts.append(valid.mode().iloc[0])
+            if parts:
+                cc_by_email[key] = ", ".join(dict.fromkeys(parts))
+
+    # De-dupe by (name, email) pair, NOT name alone. Name-only dedup was a
+    # real bug: a name can legitimately map to more than one distinct real
+    # email (e.g. RBO "5" splits into two different officers for two
+    # different branch clusters, both entered under the name "5") — keying
+    # on name alone silently kept only the first-seen email and dropped the
+    # other recipient entirely, never sending them anything. Keying on both
+    # still correctly collapses the ORIGINAL bug case this was written for
+    # (same LHO under inconsistent casing, "Maharashtra" vs "maharashtra",
+    # same email either way) because casefold() makes the name half of the
+    # key identical regardless of casing — only a genuinely different email
+    # now produces a second entry.
+    seen: dict[tuple[str, str], dict] = {}
+    for row in sub.itertuples(index=False):
+        name, email = row[0], row[1]
+        email_key = email.casefold()
+        key = (name.casefold(), email_key)
         if key not in seen:
-            seen[key] = {"name": name, "email": email, "level": level}
+            seen[key] = {"name": name, "email": email, "level": level, "cc_email": cc_by_email.get(email_key)}
     return list(seen.values())
 
 

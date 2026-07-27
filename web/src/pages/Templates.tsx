@@ -4,17 +4,20 @@ import { Plus, Save, Trash2, Star, Mail } from "lucide-react";
 import { api, apiErrorMessage } from "../lib/api";
 import { PageHeader, Card, Button, EmptyState, LoadingBlock } from "../components/ui";
 
+interface MappedReportDetail { id: number; name: string; automated: boolean }
 interface TemplateItem {
   id: number; name: string; subject: string; bodyHtml: string; isDefault: boolean;
-  updatedAt: string; mappedReports: string[];
+  updatedAt: string; mappedReports: string[]; mappedReportIds: number[];
+  mappedReportDetails: MappedReportDetail[]; isDigestManaged: boolean;
 }
-interface ReportOption { id: number; reportName: string; }
+interface ReportOption { id: number; reportName: string; frequency: string | null; }
 
 const EMPTY_FORM = {
   name: "", subject: "{{Report_Name}} - Report ({{Date}})",
   bodyHtml:
-    "<p>Dear {{Recipient_Name}},</p>\n<p>Please find attached the <b>{{Report_Name}}</b> report dated {{Date}}.</p>\n<p>Regards,<br/>Reports Distribution Team</p>",
-  isDefault: false, reportIds: [] as number[],
+    "Dear {{Recipient_Name}},\n\nPlease find attached the {{Report_Name}} report dated {{Date}}.\n\nRegards,\nReports Distribution Team",
+  isDefault: false, reportIds: [] as number[], isDigestManaged: false,
+  mappedReportDetails: [] as MappedReportDetail[],
 };
 
 export default function Templates() {
@@ -24,8 +27,8 @@ export default function Templates() {
     queryFn: async () => (await api.get("/api/templates")).data,
   });
   const { data: reports } = useQuery<ReportOption[]>({
-    queryKey: ["reports"],
-    queryFn: async () => (await api.get("/api/reports")).data,
+    queryKey: ["report-options"],
+    queryFn: async () => (await api.get("/api/templates/report-options")).data,
   });
   const { data: variables } = useQuery<string[]>({
     queryKey: ["template-variables"],
@@ -37,13 +40,12 @@ export default function Templates() {
   const [preview, setPreview] = useState<{ subject: string; bodyHtml: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const reportsById = new Map((reports ?? []).map((r) => [r.reportName, r.id]));
-
   function loadTemplate(t: TemplateItem) {
     setSelectedId(t.id);
     setForm({
       name: t.name, subject: t.subject, bodyHtml: t.bodyHtml, isDefault: t.isDefault,
-      reportIds: t.mappedReports.map((name) => reportsById.get(name)).filter((x): x is number => !!x),
+      reportIds: t.mappedReportIds, isDigestManaged: t.isDigestManaged,
+      mappedReportDetails: t.mappedReportDetails,
     });
     setError(null);
   }
@@ -56,7 +58,14 @@ export default function Templates() {
 
   const save = useMutation({
     mutationFn: async () => {
-      const body = { name: form.name, subject: form.subject, bodyHtml: form.bodyHtml, isDefault: form.isDefault, reportIds: form.reportIds };
+      // Digest-managed templates' "applies to" list is inferred by name
+      // from the Reports Mapping config, not stored via ReportMaster.
+      // default_template_id — sending the merged display list back would
+      // wrongly create real FK associations that didn't exist before.
+      const body = {
+        name: form.name, subject: form.subject, bodyHtml: form.bodyHtml, isDefault: form.isDefault,
+        reportIds: form.isDigestManaged ? [] : form.reportIds,
+      };
       if (selectedId === "new" || selectedId === null) {
         return (await api.post("/api/templates", body)).data;
       }
@@ -144,26 +153,45 @@ export default function Templates() {
               />
 
               <label className="mb-1.5 mt-4 block text-xs font-medium text-ink-500">Applies to Reports</label>
+              {form.isDigestManaged && (
+                <p className="mb-1.5 text-xs text-ink-400">
+                  Determined automatically by the Reports page's mapping (one report can feed several levels'
+                  combined emails at once) — not editable here.
+                </p>
+              )}
               <div className="flex flex-wrap gap-1.5">
-                {(reports ?? []).map((r) => {
-                  const active = form.reportIds.includes(r.id);
-                  return (
-                    <button
-                      key={r.id}
-                      onClick={() =>
-                        setForm({
-                          ...form,
-                          reportIds: active ? form.reportIds.filter((id) => id !== r.id) : [...form.reportIds, r.id],
-                        })
-                      }
-                      className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
-                        active ? "border-brand-600 bg-brand-600 text-white" : "border-ink-200 text-ink-600 hover:border-ink-300"
-                      }`}
-                    >
-                      {r.reportName}
-                    </button>
-                  );
-                })}
+                {form.isDigestManaged
+                  ? form.mappedReportDetails.map((r) => (
+                      <span
+                        key={r.id}
+                        className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
+                          r.automated
+                            ? "border-brand-600 bg-brand-600 text-white"
+                            : "border-ink-200 bg-ink-100 text-ink-500"
+                        }`}
+                      >
+                        {r.name}{!r.automated && " (paused)"}
+                      </span>
+                    ))
+                  : (reports ?? []).map((r) => {
+                      const active = form.reportIds.includes(r.id);
+                      return (
+                        <button
+                          key={r.id}
+                          onClick={() =>
+                            setForm({
+                              ...form,
+                              reportIds: active ? form.reportIds.filter((id) => id !== r.id) : [...form.reportIds, r.id],
+                            })
+                          }
+                          className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                            active ? "border-brand-600 bg-brand-600 text-white" : "border-ink-200 text-ink-600 hover:border-ink-300"
+                          }`}
+                        >
+                          {r.reportName}
+                        </button>
+                      );
+                    })}
               </div>
 
               <label className="mb-1.5 mt-4 block text-xs font-medium text-ink-500">Subject</label>
@@ -173,12 +201,16 @@ export default function Templates() {
                 className="w-full rounded-lg border border-ink-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
               />
 
-              <label className="mb-1.5 mt-4 block text-xs font-medium text-ink-500">Body (HTML)</label>
+              <label className="mb-1.5 mt-4 block text-xs font-medium text-ink-500">Body</label>
+              <p className="mb-1.5 text-xs text-ink-400">
+                Plain text — write it exactly as you want it to read. Line breaks are kept automatically; no HTML
+                needed. (A scheme table, if this template has one, still renders as a real table below.)
+              </p>
               <textarea
                 value={form.bodyHtml}
                 onChange={(e) => setForm({ ...form, bodyHtml: e.target.value })}
                 rows={9}
-                className="w-full rounded-lg border border-ink-300 px-3 py-2 font-mono text-xs focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                className="w-full rounded-lg border border-ink-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
               />
 
               <div className="mt-3 flex flex-wrap gap-1">

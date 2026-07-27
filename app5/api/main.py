@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from api.auth import get_current_user, login as auth_login
-from api.routers import dashboard, gmail, logs, org_units, reports, schedules, sources, templates
+from api.routers import automation, dashboard, gmail, logs, org_units, reports, schedules, sources, templates, tracking
 from database.db import init_db
 from services.scheduler_service import get_scheduler
 from utils.logger import setup_logging
@@ -67,6 +67,8 @@ app.include_router(sources.router)
 app.include_router(schedules.router)
 app.include_router(logs.router)
 app.include_router(gmail.router)
+app.include_router(tracking.router)
+app.include_router(automation.router)
 
 
 @app.get("/api/health")

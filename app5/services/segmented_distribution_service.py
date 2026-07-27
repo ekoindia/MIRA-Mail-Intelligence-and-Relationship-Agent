@@ -28,6 +28,46 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# The 4 scheme "achievement today" fields shown in the Daily RBO Update
+# email (see AGGREGATORS["Account Opening (Daily)"] = aggregate_account_
+# opening_and_sss). When an RBO has zero activity across ALL FOUR today —
+# not just PMJDY — the daily email would just be an empty table, so that
+# RBO is skipped entirely (no draft, no send) per explicit instruction.
+_DAILY_FTD_KEYS = ("AO_PMJDY_FTD_Achievement", "SSS_APY_FTD", "SSS_PMSBY_FTD", "SSS_PMJJBY_FTD")
+
+
+def _all_daily_schemes_zero(context: dict) -> bool:
+    values = [context.get(k) for k in _DAILY_FTD_KEYS if k in context]
+    return len(values) == len(_DAILY_FTD_KEYS) and all(v == 0 for v in values)
+
+
+def drop_zero_activity_daily_recipients(db: Session, job: DistributionJob) -> int:
+    """
+    Remove (not just skip) any EmailLog row whose per-recipient context
+    shows zero activity across all 4 daily schemes — must be called AFTER
+    apply_segmented_overrides has populated context_override_json. Returns
+    the number of recipients removed. Deleting the row here (rather than
+    marking it skipped) means run_distribution_job never sees it, so no
+    draft or send is created for that RBO at all.
+    """
+    removed = 0
+    for log_row in list(job.email_logs):
+        if not log_row.context_override_json:
+            continue
+        context = json.loads(log_row.context_override_json)
+        if _all_daily_schemes_zero(context):
+            logger.info(
+                "Daily digest: skipping %s <%s> — zero activity across all 4 schemes today.",
+                log_row.recipient_name, log_row.recipient_email,
+            )
+            db.delete(log_row)
+            removed += 1
+
+    if removed:
+        job.total_recipients = max(job.total_recipients - removed, 0)
+        db.flush()
+    return removed
+
 
 def apply_segmented_overrides(db: Session, job: DistributionJob, report_name: str) -> bool:
     """
@@ -45,7 +85,9 @@ def apply_segmented_overrides(db: Session, job: DistributionJob, report_name: st
     df = load_calling_sheet()
 
     for log_row in job.email_logs:
-        recipient_df = filter_for_recipient(df, log_row.recipient_type, log_row.recipient_name)
+        recipient_df = filter_for_recipient(
+            df, log_row.recipient_type, log_row.recipient_name, log_row.recipient_email,
+        )
         if recipient_df.empty:
             logger.warning(
                 "Segmented distribution: no Calling Sheet rows for %s '%s' (report=%s).",
