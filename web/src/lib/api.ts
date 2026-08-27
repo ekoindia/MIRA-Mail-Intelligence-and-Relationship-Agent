@@ -1,11 +1,10 @@
 import axios from "axios";
 
-// Production build (rack server) talks to the backend same-origin — nginx
-// serves this build and reverse-proxies /api/ to the backend on the SAME
-// dedicated port (see the server's nginx site config), so a relative,
-// empty base resolves correctly. Local dev keeps hitting the backend
-// directly on :8000, unchanged.
-export const API_BASE = import.meta.env.PROD ? "" : "http://127.0.0.1:8000";
+// Production build (rack server, path-proxied under /mira/ on the shared
+// csp-dashboard nginx host — same pattern as wa-issue-fetcher) talks to
+// the backend same-origin via /mira/api/. Local dev keeps hitting the
+// backend directly on :8000, unchanged.
+export const API_BASE = import.meta.env.PROD ? "/mira" : "http://127.0.0.1:8000";
 
 export const api = axios.create({ baseURL: API_BASE });
 
