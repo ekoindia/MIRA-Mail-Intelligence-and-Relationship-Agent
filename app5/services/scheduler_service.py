@@ -48,7 +48,30 @@ def get_scheduler() -> BackgroundScheduler:
             check_and_run_daily_autosend, "interval", minutes=1,
             id="daily_autosend_poller", replace_existing=True,
         )
-        logger.info("Scheduler started with 1-minute pollers (manual + auto-distribution + daily autosend).")
+
+        from services.weekly_autosend_service import check_and_run_weekly_autosend
+
+        _scheduler.add_job(
+            check_and_run_weekly_autosend, "interval", minutes=1,
+            id="weekly_autosend_poller", replace_existing=True,
+        )
+
+        from services.suggestion_service import run_scheduled_suggestion_scan
+
+        _scheduler.add_job(
+            run_scheduled_suggestion_scan, "interval", minutes=30,
+            id="suggestions_poller", replace_existing=True,
+        )
+
+        _scheduler.add_job(
+            check_and_run_incoming_sync, "interval", minutes=5,
+            id="incoming_sync_poller", replace_existing=True,
+        )
+        logger.info(
+            "Scheduler started with 1-minute pollers (manual + auto-distribution + daily autosend "
+            "+ weekly autosend), a 30-minute suggestions poller, and a 5-minute incoming-mail sync "
+            "poller (off by default)."
+        )
     return _scheduler
 
 
@@ -128,6 +151,126 @@ def check_and_run_due_schedules() -> None:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Scheduled run '%s' failed: %s", schedule.name, exc)
+
+
+def check_and_run_incoming_sync() -> None:
+    """Poller: no-ops unless explicitly enabled (Settings toggle, off by
+    default). When enabled, mirrors POST /api/incoming/sync exactly —
+    create_drafts hardcoded False, detect-and-score only, never drafts/sends.
+    Also scans the Sent folder (same toggle — one "is inbox syncing on"
+    switch covers both directions rather than adding a second one)."""
+    from services.automation_settings_service import get_incoming_sync_enabled
+    from services.incoming_service import (
+        backfill_recipient_kind, backfill_triage, ingest_new_messages,
+        recheck_pending_replies, sync_extracted_tasks,
+    )
+    from services.sent_mail_service import backfill_sent_reply_status, scan_sent_mail
+
+    with get_db() as db:
+        if not get_incoming_sync_enabled(db):
+            return
+
+    try:
+        summary = ingest_new_messages(create_drafts=False)
+        replies_updated = recheck_pending_replies()
+        recipient_kind_backfilled = backfill_recipient_kind()
+        triage_backfilled = backfill_triage()
+        # Insert-only (never reopens/closes an existing task) — this is what
+        # actually populates the Work Queue. Was missing from this poller
+        # (only POST /api/incoming/sync's manual button ran it), so the
+        # Work Queue silently went stale for anyone who never clicked
+        # "Sync now" even though ingest + forwarding kept running fine.
+        tasks_extracted = sync_extracted_tasks()
+        logger.info(
+            "Incoming sync poller: %s, replies_updated=%d, recipient_kind_backfilled=%d, "
+            "triage_backfilled=%d, tasks_created=%d",
+            summary, replies_updated, recipient_kind_backfilled, triage_backfilled,
+            tasks_extracted["created"],
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Incoming sync poller failed.")
+
+    try:
+        sent_summary = scan_sent_mail()
+        sent_reply_backfilled = backfill_sent_reply_status()
+        logger.info("Sent-mail sync poller: %s, reply_backfilled=%d", sent_summary, sent_reply_backfilled)
+    except Exception:  # noqa: BLE001
+        logger.exception("Sent-mail sync poller failed.")
+
+    _run_limit_forward_cycle()
+    _run_incoming_ack_cycle()
+
+
+def _run_incoming_ack_cycle() -> None:
+    """DRAFTS (never sends) a generic acknowledgment for incoming SBI-domain
+    status-push mail — see services/incoming_ack_service.py. Added
+    2026-08-25 per explicit instruction, same supervised-trial shape as
+    _run_limit_forward_cycle: its own toggle, bounded by a 'since' stamp so
+    a first run after enabling can't sweep up the historical backlog.
+    """
+    from services.automation_settings_service import (
+        get_incoming_ack_enabled,
+        get_incoming_ack_since,
+    )
+    from services.incoming_ack_service import create_ack_drafts
+
+    with get_db() as db:
+        if not get_incoming_ack_enabled(db):
+            return
+        since = get_incoming_ack_since(db)
+
+    if since is None:
+        logger.warning("Incoming ack drafting enabled but no 'since' stamp — skipping to avoid backlog sweep.")
+        return
+
+    try:
+        summary = create_ack_drafts(max_items=25, since=since)
+        if summary.get("drafted"):
+            logger.info("Incoming ack drafts created (DRAFT only, nothing sent): %s", summary)
+    except Exception:  # noqa: BLE001
+        logger.exception("Incoming ack drafting failed.")
+
+
+def _run_limit_forward_cycle() -> None:
+    """SENDS the limit-approval forward directly to Priyanshu for
+    newly-arrived requests (switched over from a supervised draft-only trial
+    that ran since 2026-08-14, per explicit instruction after that trial was
+    reviewed), and closes tickets Priyanshu has approved.
+
+    Gated by its own toggle, separate from the sync toggle, and bounded by
+    the "since" stamp so it can never sweep up the historical backlog.
+    Closing tickets is safe to run regardless of that toggle — it only
+    updates this app's own records and sends nothing.
+    """
+    from services.automation_settings_service import (
+        get_limit_forward_enabled,
+        get_limit_forward_since,
+    )
+    from services.limit_forward_service import (
+        close_tickets_from_approvals,
+        create_forward_sends,
+    )
+
+    try:
+        close_tickets_from_approvals()
+    except Exception:  # noqa: BLE001
+        logger.exception("Ticket auto-close from approvals failed.")
+
+    with get_db() as db:
+        if not get_limit_forward_enabled(db):
+            return
+        since = get_limit_forward_since(db)
+
+    if since is None:
+        logger.warning("Limit forward sending enabled but no 'since' stamp — skipping to avoid backlog sweep.")
+        return
+
+    try:
+        summary = create_forward_sends(max_items=25, since=since)
+        if summary.get("sent"):
+            logger.info("Limit forward emails SENT to Priyanshu: %s", summary)
+    except Exception:  # noqa: BLE001
+        logger.exception("Limit forward sending failed.")
 
 
 def list_schedules(db: Session) -> list[ScheduleConfig]:

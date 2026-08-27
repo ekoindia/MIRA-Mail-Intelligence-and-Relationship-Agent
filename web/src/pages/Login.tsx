@@ -31,10 +31,10 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center gap-3">
-          <EkoLogo className="h-11 w-auto" />
+          <EkoLogo className="h-14 w-auto rounded-lg shadow-lg" />
           <div className="text-center">
-            <div className="text-lg font-semibold text-white">Reporting Console</div>
-            <div className="text-sm text-ink-400">Eko Bharat Ventures</div>
+            <div className="text-lg font-semibold text-white">MIRA</div>
+            <div className="text-sm text-ink-400">Eko Kiosk</div>
           </div>
         </div>
 

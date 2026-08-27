@@ -20,6 +20,7 @@ the wrong column.
 """
 from __future__ import annotations
 
+import os
 import re
 
 import pandas as pd
@@ -29,7 +30,10 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-DEFAULT_SHEET_ID = "1KHy7ejiUWZg9EQA0x4lm0axnVS5Hpiw1vLruc-0jSOg"
+# No hardcoded fallback on purpose — the real spreadsheet ID is an
+# operational detail, not something to keep in source. Set
+# CALLING_SHEET_SPREADSHEET_ID in .env (see .env.example).
+DEFAULT_SHEET_ID = os.getenv("CALLING_SHEET_SPREADSHEET_ID", "").strip()
 DEFAULT_TAB = "Calling Sheet New"
 
 # Scheme mapping confirmed by user:
@@ -177,6 +181,11 @@ def _resolve_columns(header: _HeaderIndex) -> dict:
         "lho": "Circle (LHO)",
         "terminal_status": "Terminal Status",
         "csp_score": "CSP Score",
+        # DC's own name — was previously unresolved (only "Email ID DC" /
+        # dc_email existed); added 2026-08-27 for the SBI Kiosk Growth
+        # Report's Physical Camp table, which is organised by DC rather
+        # than by RM.
+        "dc_name": "District Coordinator",
     }
     for key, field in identity.items():
         col[key] = header.one(field, field=field)
@@ -238,6 +247,10 @@ def _resolve_columns(header: _HeaderIndex) -> dict:
     # "No Slab"), not numeric counts — kept as text and aggregated as a
     # distribution (see report_aggregation_service.aggregate_dfs_incentive_slab).
     col["slab_target_label"] = header.one("target dfs slab", group=target_group, field_prefix="DFS Slab")
+    # Loan Lead Generation's own monthly target ("Lead Gen\n Monthly") lives
+    # in this same Targets block — previously never resolved at all, so
+    # Loan Lead Generation had no target/achievement % (only a raw count).
+    col["target_loan_lead"] = header.one("target lead gen", group=target_group, field_prefix="Lead Gen")
 
     # --- MTD Achievement blocks: one group per month (Apr, May, Jun, Jul, ...).
     # Current month = the last such group in sheet order.
@@ -262,6 +275,13 @@ def _resolve_columns(header: _HeaderIndex) -> dict:
     col["loan_lead_count_curr"] = header.last(
         "loan lead count", field_prefix="Count of loan lead generate"
     )
+    # "Type on loan" sits immediately after the CURRENT month's count column
+    # (the previous month's count is paired with a "Status" column instead,
+    # not a loan-type breakdown) — free text like "Personal Loan-1" or,
+    # when a CSP generated leads across more than one type this month,
+    # "Agri Loan-1, Personal Loan-5" (comma-separated "Type-Count" pairs).
+    # Parsed in report_aggregation_service.aggregate_loan_lead_generation.
+    col["loan_type_detail"] = header.one("loan type", field="Type on loan")
 
     return col
 
@@ -305,7 +325,7 @@ def load_calling_sheet(
 
     numeric_cols = [
         "total_accounts", "commission_curr_month", "commission_prev_month",
-        "loan_lead_count_curr", "csp_score", "growth_streak_curr",
+        "loan_lead_count_curr", "target_loan_lead", "csp_score", "growth_streak_curr",
         *(f"target_{s.lower()}" for s in (*SSS_SCHEMES, ACCOUNT_OPENING_SCHEME)),
         *(f"mtd_{s.lower()}" for s in (*SSS_SCHEMES, ACCOUNT_OPENING_SCHEME)),
         *(f"ftd_{s.lower()}" for s in (*SSS_SCHEMES, ACCOUNT_OPENING_SCHEME)),

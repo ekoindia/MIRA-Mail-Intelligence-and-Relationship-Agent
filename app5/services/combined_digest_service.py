@@ -33,6 +33,7 @@ template/variable names keep working unchanged.
 from __future__ import annotations
 
 import json
+from datetime import date
 
 from database.models import DistributionJob, EmailLog, EmailStatus, EmailTemplate, ReportMaster, ReportUpload
 from database.org_models import OrgLevel
@@ -51,7 +52,10 @@ from services.report_aggregation_service import (
     aggregate_loan_lead_generation,
     filter_for_recipient,
 )
+from services.team_calling_summary_service import get_sbi_kiosk_growth_context
+from services.growth_service import apply_growth, is_first_monday_of_month, load_two_previous_contexts
 from services.report_source_service import fetch_any_report
+from services.snapshot_service import save_drafted_report_snapshot
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -67,6 +71,10 @@ _UNIT_AGGREGATORS: dict[str, tuple] = {
     "Inactive CSPs (Weekly)": (aggregate_inactive_csps, "INACT"),
     "DFS Incentive Slab (Monthly)": (aggregate_dfs_incentive_slab, "DFS"),
     "CSP Income Impact (Monthly)": (aggregate_csp_income_impact, "INCOME"),
+    # Single fixed recipient (SBI Kiosk, a Corporate-Center-level org_unit
+    # row) — always the only Daily report at that level, so no prefix
+    # needed. Added 2026-08-27, see [[project_sbi_kiosk_growth_report]].
+    "SBI Kiosk — Onboarding & Growth (Daily)": (get_sbi_kiosk_growth_context, None),
 }
 
 # Only needed for levels combining 2+ automated reports — the single-report
@@ -81,7 +89,7 @@ MULTI_REPORT_DIGEST_TEMPLATE_NAMES: dict[tuple[str, str], str] = {
     ("Monthly", OrgLevel.CORP.value): "Monthly Corporate Center Update",
 }
 
-ALL_LEVELS = [OrgLevel.RBO, OrgLevel.LHO, OrgLevel.CORP, OrgLevel.BRANCH, OrgLevel.AO]
+ALL_LEVELS = [OrgLevel.RBO, OrgLevel.LHO, OrgLevel.CORP, OrgLevel.BRANCH, OrgLevel.AO, OrgLevel.INTERNAL]
 
 
 def reports_for_level(db, frequency: str, level: OrgLevel) -> list[ReportMaster]:
@@ -166,7 +174,60 @@ def display_report_list(reports: list[ReportMaster]) -> list[dict]:
     return entries
 
 
+_LOAN_LEAD_REPORT = "Loan Lead Generation (Weekly)"
+
+# The headline number each report unit contributes to an email. A recipient
+# for whom every one of these is zero would receive a mail that reads 0
+# everywhere — no achievement, no leads, nothing inactive — so they are
+# skipped entirely rather than drafted, per explicit instruction.
+#
+# This generalises the older loan-lead-only rule to every level. Branch's
+# digest carries only Leads_Generated, so its behaviour is unchanged (362 of
+# 375 Branch recipients were already being skipped this way); RBO/LHO/
+# Corporate Center now get the same treatment instead of receiving an
+# all-zero email.
+#
+# Note this is deliberately about ACTIVITY, not roster size: a recipient with
+# CSPs on the books but nothing achieved is exactly the all-zero case being
+# skipped. Keys absent from a level's context are ignored, so each level is
+# judged only on the metrics it actually reports.
+_ACTIVITY_METRIC_KEYS = (
+    "AO_Weekly_Total", "AO_MTD_Cumulative",
+    "SSS_Weekly_Total", "SSS_MTD_Cumulative",
+    "INACT_Inactive_Count",
+    "LL_Leads_Generated", "Leads_Generated",
+)
+
+
+def _as_number(value) -> float:
+    """Context values arrive as ints, floats or already-formatted strings
+    ("1,234", "12%"). Anything unparseable counts as zero."""
+    try:
+        return float(str(value).replace(",", "").replace("%", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _has_any_activity(context: dict) -> bool:
+    present = [k for k in _ACTIVITY_METRIC_KEYS if k in context]
+    if not present:
+        # No recognised metric at all — don't silently drop the recipient on
+        # the strength of a key set this function doesn't know about.
+        return True
+    return any(_as_number(context[k]) != 0 for k in present)
+
+
 def _combined_context(reports: list[ReportMaster], recipient_df) -> dict:
+    """
+    Each unit's variables stay individually visible/editable in the
+    Templates page (e.g. {{LL_Target}}, {{LL_Leads_Generated}} when
+    combined with other reports; unprefixed when Loan Lead Generation is
+    the only report for a level, e.g. Branch) — no unit is collapsed into
+    an opaque server-rendered HTML blob. Loan Lead Generation's "skip this
+    report when this recipient has zero leads" requirement is instead
+    handled entirely in the template body via {{#if Has_Leads}}...{{/if}}
+    (or {{#if LL_Has_Leads}} when prefixed) — see utils/helpers.py.
+    """
     combined: dict = {}
     multi = len(reports) > 1
     for r in reports:
@@ -196,7 +257,10 @@ def resolve_digest_template_id(db, frequency: str, level: OrgLevel, reports: lis
     return template.id
 
 
-def send_combined_digest(db, frequency: str, level: OrgLevel, user: dict, force_draft: bool = False) -> dict:
+def send_combined_digest(
+    db, frequency: str, level: OrgLevel, user: dict, force_draft: bool = False,
+    bypass_rbo_safety_net: bool = False,
+) -> dict:
     """
     Fetch the latest calling-sheet data and send/draft ONE combined email
     per recipient at this org level, covering every automated report
@@ -255,8 +319,13 @@ def send_combined_digest(db, frequency: str, level: OrgLevel, user: dict, force_
 
     # Same safety net as the per-report path: force draft-only whenever
     # RBO/AO recipients are included, regardless of the anchor report's
-    # stored Draft Only / Send Directly setting.
-    if any(r.recipient_type in (OrgLevel.RBO.value, OrgLevel.AO.value) for r in recipients):
+    # stored Draft Only / Send Directly setting. bypass_rbo_safety_net lifts
+    # this ONLY for the callers that explicitly opt in (currently the
+    # weekly auto-send cycle, per explicit instruction on 2026-08-24) — the
+    # manual Scheduler-page button keeps this safety net by default.
+    if not bypass_rbo_safety_net and any(
+        r.recipient_type in (OrgLevel.RBO.value, OrgLevel.AO.value) for r in recipients
+    ):
         force_draft = True
 
     job: DistributionJob = create_distribution_job(
@@ -266,14 +335,68 @@ def send_combined_digest(db, frequency: str, level: OrgLevel, user: dict, force_
     )
 
     df = load_calling_sheet()
-    for log_row in job.email_logs:
+    # Whenever Loan Lead Generation is the ONLY report in this level's
+    # email (Branch today), a recipient with zero leads this month would
+    # get a completely empty email — skip them entirely rather than draft/
+    # send nothing, per explicit instruction. For levels with other
+    # reports too (RBO/LHO/Corporate Center), a zero-lead recipient still
+    # gets their email; only the Loan Lead section is omitted, via the
+    # template's own {{#if Has_Leads}}/{{#if LL_Has_Leads}} block.
+    loan_lead_only = len(reports) == 1 and reports[0].report_name == _LOAN_LEAD_REPORT
+
+    # Week-over-week comparison, Weekly only. Loaded once per run rather than
+    # per recipient: it's the same snapshots for everyone, matched by email
+    # inside apply_growth. TWO prior snapshots are loaded (not just one) so
+    # cumulative MTD metrics like Account Opening / SSS can be de-cumulated
+    # into an isolated week's activity — see growth_service.py's docstring.
+    today = date.today()
+    prev_snapshot_date, prev_contexts = (None, {})
+    prev2_snapshot_date, prev2_contexts = (None, {})
+    if frequency == "Weekly":
+        prev_snapshot_date, prev_contexts, prev2_snapshot_date, prev2_contexts = (
+            load_two_previous_contexts(db, before=today)
+        )
+
+    removed = 0
+    for log_row in list(job.email_logs):
         recipient_df = filter_for_recipient(df, log_row.recipient_type, log_row.recipient_name, log_row.recipient_email)
         context = _combined_context(reports, recipient_df)
+        if (loan_lead_only and not context.get("Has_Leads")) or not _has_any_activity(context):
+            db.delete(log_row)
+            removed += 1
+            continue
+        if frequency == "Weekly":
+            email_key = (log_row.recipient_email or "").lower()
+            apply_growth(
+                context,
+                prev_contexts.get(email_key),
+                snapshot_date=prev_snapshot_date,
+                current_date=today,
+                previous_previous_context=prev2_contexts.get(email_key),
+                previous_previous_date=prev2_snapshot_date,
+                is_first_monday=is_first_monday_of_month(today),
+            )
         log_row.attachment_override_path = ""
         log_row.context_override_json = json.dumps(context)
+    if removed:
+        job.total_recipients = max(job.total_recipients - removed, 0)
     db.flush()
 
+    if job.total_recipients == 0:
+        raise ValueError("Every recipient had all-zero data this period — nothing to send.")
+
     run_distribution_job(db, job.id, force_draft=force_draft)
+
+    # Snapshot AFTER the run, so next week has a baseline. Saves the exact
+    # numbers that were drafted, not a fresh sheet re-read (the sheet moves).
+    # Deliberately non-fatal: a snapshot failure must not make a successfully
+    # drafted report report itself as failed.
+    if frequency == "Weekly":
+        try:
+            saved = save_drafted_report_snapshot(db, [job.id], today)
+            logger.info("Weekly snapshot saved for %s: %d recipient row(s).", today, saved)
+        except Exception:  # noqa: BLE001
+            logger.exception("Weekly snapshot failed for job %s — report itself was unaffected.", job.id)
 
     logs = db.query(EmailLog).filter(EmailLog.job_id == job.id).all()
     return {

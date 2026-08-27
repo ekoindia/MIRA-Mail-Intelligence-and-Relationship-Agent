@@ -5,6 +5,11 @@ import re
 from datetime import datetime, timedelta
 
 TEMPLATE_VAR_PATTERN = re.compile(r"\{\{\s*(\w+)\s*\}\}")
+# {{#if Flag}}...{{/if}} — keeps the enclosed text (which may itself contain
+# ordinary {{Variable}} placeholders) only when context[Flag] is truthy,
+# otherwise drops the whole block. One level only (non-nested) — that's all
+# any current template needs.
+TEMPLATE_IF_PATTERN = re.compile(r"\{\{#if\s+(\w+)\s*\}\}(.*?)\{\{/if\}\}", re.DOTALL)
 
 
 def utc_iso(dt: datetime | None) -> str | None:
@@ -39,14 +44,28 @@ SUPPORTED_TEMPLATE_VARS = [
 def render_template(text: str, context: dict[str, str]) -> str:
     """Replace {{Variable}} placeholders in a template string with context values.
 
-    Unknown variables are left untouched so authors can spot typos.
+    Supports one level of conditional block, {{#if Flag}}...{{/if}}, resolved
+    before plain variable substitution — lets a template author write a
+    normal section (individually editable {{Variable}} placeholders and all)
+    that's still omitted entirely for a recipient with nothing to report
+    (e.g. zero loan leads this month), instead of showing up with all-zero
+    numbers.
+
+    Unknown variables (outside a false #if block) are left untouched so
+    authors can spot typos.
     """
+
+    def _sub_if(match: re.Match) -> str:
+        key, body = match.group(1), match.group(2)
+        return body if context.get(key) else ""
+
+    text = TEMPLATE_IF_PATTERN.sub(_sub_if, text or "")
 
     def _sub(match: re.Match) -> str:
         key = match.group(1)
         return str(context.get(key, match.group(0)))
 
-    return TEMPLATE_VAR_PATTERN.sub(_sub, text or "")
+    return TEMPLATE_VAR_PATTERN.sub(_sub, text)
 
 
 def render_email_body(text: str, context: dict[str, str]) -> str:

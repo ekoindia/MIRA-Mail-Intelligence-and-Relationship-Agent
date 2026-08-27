@@ -47,14 +47,21 @@ from datetime import datetime, timedelta
 from config import settings
 from database.db import get_db
 from database.models import AppSetting, ReportMaster
-from services.automation_settings_service import get_autosend_enabled
+from services.automation_settings_service import (
+    WEEKDAY_NAMES,
+    get_autosend_enabled,
+    get_autosend_skip_weekdays,
+)
 from services.calling_sheet_freshness_service import check_freshness, is_confirmed_fresh_today
 from services.report_send_service import send_report_now
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_SYSTEM_USER = {"id": 0, "username": "autosend_scheduler"}
+# Real users.id — distribution_jobs.created_by is a genuine FK, so this
+# can't be a synthetic placeholder id. Seeded once (users.username =
+# "autosend_scheduler", is_active=False so it can never actually log in).
+_SYSTEM_USER = {"id": 2, "username": "autosend_scheduler"}
 
 _KEY_LAST_CHECK_AT = "autosend_last_check_at"
 _KEY_LAST_SENT_DATE = "autosend_last_sent_date"
@@ -91,6 +98,18 @@ def check_and_run_daily_autosend() -> None:
         # .env default — this is what actually lets the toggle be flipped
         # live without restarting the backend.
         if not get_autosend_enabled(db):
+            return
+
+        # Standing "don't run today" rule (default: Monday — the daily report
+        # covers the previous day, and Monday's would cover Sunday). Checked
+        # before any freshness/state bookkeeping so a skipped day leaves no
+        # trace and tomorrow behaves completely normally.
+        skip_days = get_autosend_skip_weekdays(db)
+        if now.weekday() in skip_days:
+            logger.info(
+                "Autosend: skipping — %s is a configured no-send day.",
+                WEEKDAY_NAMES[now.weekday()],
+            )
             return
 
         if _get_setting(db, _KEY_LAST_SENT_DATE) == today_str:
@@ -140,11 +159,13 @@ def check_and_run_daily_autosend() -> None:
         sent, skipped, failed = 0, 0, 0
         for rm in reports:
             try:
-                # force_draft=True unconditionally: this cycle must only ever
-                # create Gmail drafts for a human to review and send, never
-                # send real mail on its own — regardless of each report's
-                # stored delivery_mode or recipient composition.
-                send_report_now(db, rm, _SYSTEM_USER, force_draft=True)
+                # force_draft=False: this cycle now sends for real whenever
+                # a report's own delivery_mode says "send" — draft-only is
+                # reserved for the manual "Draft Only" action, not applied
+                # blanket here anymore. Per-report delivery_mode on the
+                # Reports page is the only thing that decides draft vs send
+                # for an unattended run.
+                send_report_now(db, rm, _SYSTEM_USER, force_draft=False)
                 sent += 1
             except ValueError as exc:
                 skipped += 1

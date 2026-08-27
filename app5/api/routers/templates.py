@@ -14,7 +14,7 @@ from services.combined_digest_service import (
     reports_for_level,
     resolve_digest_template_id,
 )
-from utils.helpers import SUPPORTED_TEMPLATE_VARS, render_email_body, render_template
+from utils.helpers import SUPPORTED_TEMPLATE_VARS, TEMPLATE_IF_PATTERN, render_email_body, render_template
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
 
@@ -135,6 +135,15 @@ def preview(body: PreviewIn, user: dict = Depends(get_current_user)):
         "Corp_Name": "Corporate Center", "Report_Name": "Weekly Sales Report", "Date": "13-Jul-2026",
         "Week_Number": "29", "Week_Start": "13", "Week_End": "19 Jul 2026", "Month_Year": "July 2026",
     }
+    # Preview is cosmetic only and never fetches real sheet data — but a
+    # {{#if Flag}}...{{/if}} conditional section (e.g. Loan Lead Generation,
+    # which real sends omit for a recipient with zero leads) would
+    # otherwise vanish here too, since Flag is never in this sample dict.
+    # Force every #if flag actually referenced in this template to true so
+    # its content renders here as raw {{Variable}} placeholders, same as
+    # everywhere else in this preview, instead of being silently hidden.
+    for flag, _body in TEMPLATE_IF_PATTERN.findall(body.subject + body.bodyHtml):
+        sample[flag] = True
     return {"subject": render_template(body.subject, sample), "bodyHtml": render_email_body(body.bodyHtml, sample)}
 
 

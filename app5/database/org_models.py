@@ -40,6 +40,14 @@ class OrgLevel(str, enum.Enum):
     RBO = "RBO"
     LHO = "LHO"
     BRANCH = "Branch"
+    # Added 2026-08-27 for the SBI Kiosk Growth report — explicitly NOT
+    # Corporate Center: that level already has a real recipient
+    # (cm3.rba@sbi.co.in) with its own automated reports, and reusing it
+    # would have silently added every one of those to SBI Kiosk's inbox
+    # too (recipient resolution is level-wide, not per-report). INTERNAL
+    # is its own isolated bucket — for org_units rows that are internal-
+    # use recipients, not part of the real SBI org hierarchy at all.
+    INTERNAL = "Internal"
 
 
 class OrgUnit(Base):

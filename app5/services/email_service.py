@@ -304,6 +304,8 @@ def run_distribution_job(
     # Week/month placeholders are the same for every recipient in a batch —
     # compute once rather than per-email.
     now = datetime.now()
+    from services.festival_theme_service import get_festival_context
+
     shared_context = {
         # Defaults for every generic {{Variable}} the automated templates
         # reference — overridden below with real computed values when this
@@ -320,6 +322,9 @@ def run_distribution_job(
         "Week_Start": week_start_str(now),
         "Week_End": week_end_str(now),
         "Month_Year": month_year_str(now),
+        # Purely decorative — see services/festival_theme_service.py. Empty
+        # on every non-festival day; never affects report data.
+        **get_festival_context(now.date()),
     }
 
     for i in range(0, total, batch_size):
@@ -400,8 +405,11 @@ def run_distribution_job(
 
         # Pace batches with a randomized pause (not a fixed interval) so the
         # send pattern doesn't look like an automated burst to Gmail's abuse
-        # detection. Skipped after the very last batch — nothing left to wait for.
-        if i + batch_size < total:
+        # detection. Only applies to real sends (direct_send) — drafts never
+        # leave the account and have no abuse-detection exposure to pace
+        # around, so drafting should run at full speed. Skipped after the
+        # very last batch — nothing left to wait for.
+        if i + batch_size < total and gmail_send_mode == "direct_send":
             pause = random.randint(settings.email_pace_min_seconds, settings.email_pace_max_seconds)
             logger.info("Pacing: waiting %ss before the next batch of %s emails.", pause, batch_size)
             time.sleep(pause)

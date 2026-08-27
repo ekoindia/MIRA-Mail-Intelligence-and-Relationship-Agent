@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  RefreshCw, TrendingUp, Users, UserX, Handshake, Clock, Send, PenLine, AlertTriangle, Mail,
+  RefreshCw, TrendingUp, Users, UserX, Handshake, Clock, Send, PenLine, AlertTriangle, Mail, ArrowUpRight, Inbox,
 } from "lucide-react";
 import { api } from "../lib/api";
-import { PageHeader, Card, CardHeader, Badge, LoadingBlock, EmptyState, Table, Th, Td } from "../components/ui";
+import { PageHeader, Card, CardHeader, Badge, LoadingBlock, EmptyState, Table, Th, Td, Toggle } from "../components/ui";
+import IncomingSection, { useIncomingLive } from "./Incoming";
+import OutgoingLevelDashboard from "../components/OutgoingLevelDashboard";
 
 const REFRESH_MS = 45_000;
 
@@ -84,7 +86,7 @@ function BusinessKpiCard({
         </div>
       </div>
       <div className="mt-3 flex items-baseline gap-1">
-        <span className="text-3xl font-semibold tracking-tight text-ink-900">{percent}%</span>
+        <span className="font-mono text-3xl font-semibold tracking-tight tabular-nums text-ink-900">{percent}%</span>
       </div>
       <div className="mt-2"><ProgressBar percent={percent} /></div>
       <div className="mt-2 text-xs text-ink-500">{sub}</div>
@@ -106,7 +108,7 @@ function CountKpiCard({
           <Icon className="h-4 w-4" strokeWidth={2.25} />
         </div>
       </div>
-      <div className="mt-3 text-3xl font-semibold tracking-tight text-ink-900">{value}</div>
+      <div className="mt-3 font-mono text-3xl font-semibold tracking-tight tabular-nums text-ink-900">{value}</div>
       <div className="mt-2 text-xs text-ink-500">{sub}</div>
     </Card>
   );
@@ -177,15 +179,46 @@ function LeaderboardCard({
   );
 }
 
+function ViewToggle({
+  view, onChange,
+}: { view: "outgoing" | "incoming"; onChange: (v: "outgoing" | "incoming") => void }) {
+  const options: { value: "outgoing" | "incoming"; label: string; icon: typeof ArrowUpRight }[] = [
+    { value: "outgoing", label: "Outgoing", icon: ArrowUpRight },
+    { value: "incoming", label: "Incoming", icon: Inbox },
+  ];
+  return (
+    <div className="flex items-center gap-0.5 rounded-lg border border-ink-200 bg-ink-50 p-0.5">
+      {options.map((o) => {
+        const active = view === o.value;
+        const Icon = o.icon;
+        return (
+          <button
+            key={o.value}
+            onClick={() => onChange(o.value)}
+            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+              active ? "bg-white text-brand-700 shadow-sm" : "text-ink-500 hover:text-ink-800"
+            }`}
+          >
+            <Icon className="h-3.5 w-3.5" strokeWidth={2.25} />
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const queryClient = useQueryClient();
-  const { data, isLoading, isFetching, dataUpdatedAt } = useQuery<DashboardData>({
+  const [view, setView] = useState<"outgoing" | "incoming">("outgoing");
+  const { data, isLoading, isFetching } = useQuery<DashboardData>({
     queryKey: ["dashboard"],
     queryFn: async () => (await api.get("/api/dashboard")).data,
     refetchInterval: REFRESH_MS,
     refetchOnWindowFocus: true,
   });
   const relativeSync = useRelativeTime(data?.lastSynced);
+  const incomingLive = useIncomingLive();
 
   if (isLoading || !data) return <LoadingBlock />;
 
@@ -197,28 +230,72 @@ export default function Dashboard() {
     <div>
       <PageHeader
         title="Dashboard"
-        subtitle="This month's real progress across every RBO and LHO, from the live Calling Sheet."
+        subtitle={
+          view === "outgoing"
+            ? "This month's real progress across every RBO and LHO, from the live Calling Sheet."
+            : "What's arriving in the connected inbox, and how much of it could be automated."
+        }
         action={
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5 text-xs text-ink-500">
-              <span className="relative flex h-2 w-2">
-                <span className={`absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 ${isFetching ? "animate-ping" : ""}`} />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-              </span>
-              Live · synced {relativeSync}
-            </div>
-            <button
-              onClick={() => queryClient.invalidateQueries({ queryKey: ["dashboard"] })}
-              disabled={isFetching}
-              title="Refresh now"
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-ink-200 text-ink-500 hover:bg-ink-50 disabled:opacity-50"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? "animate-spin" : ""}`} strokeWidth={2.25} />
-            </button>
+            <ViewToggle view={view} onChange={setView} />
+            {view === "outgoing" ? (
+              <>
+                <div className="flex items-center gap-1.5 text-xs text-ink-500">
+                  <span className="relative flex h-2 w-2">
+                    <span className={`absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 ${isFetching ? "animate-ping" : ""}`} />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                  </span>
+                  Live · synced {relativeSync}
+                </div>
+                <button
+                  onClick={() => queryClient.invalidateQueries({ queryKey: ["dashboard"] })}
+                  disabled={isFetching}
+                  title="Refresh now"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-ink-200 text-ink-500 hover:bg-ink-50 disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? "animate-spin" : ""}`} strokeWidth={2.25} />
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-1.5 text-xs text-ink-500">
+                  <span className="relative flex h-2 w-2">
+                    <span
+                      className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                        incomingLive.syncStatus?.syncEnabled ? "bg-emerald-400" : "bg-ink-300"
+                      } ${incomingLive.isRefreshing ? "animate-ping" : ""}`}
+                    />
+                    <span
+                      className={`relative inline-flex h-2 w-2 rounded-full ${
+                        incomingLive.syncStatus?.syncEnabled ? "bg-emerald-500" : "bg-ink-400"
+                      }`}
+                    />
+                  </span>
+                  {incomingLive.syncStatus?.syncEnabled ? `Live · refreshed ${incomingLive.relativeRefresh}` : "Live sync off"}
+                  <Toggle
+                    checked={!!incomingLive.syncStatus?.syncEnabled}
+                    onChange={() => incomingLive.toggleAutoSync.mutate(!incomingLive.syncStatus?.syncEnabled)}
+                    disabled={!incomingLive.syncStatus || incomingLive.toggleAutoSync.isPending}
+                  />
+                </div>
+                <button
+                  onClick={() => incomingLive.sync.mutate()}
+                  disabled={incomingLive.sync.isPending}
+                  title="Sync now"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-ink-200 text-ink-500 hover:bg-ink-50 disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${incomingLive.sync.isPending ? "animate-spin" : ""}`} strokeWidth={2.25} />
+                </button>
+              </>
+            )}
           </div>
         }
       />
 
+      {view === "incoming" ? (
+        <IncomingSection live={incomingLive} />
+      ) : (
+      <>
       <div className="grid grid-cols-4 gap-4">
         <BusinessKpiCard
           label="PMJDY Achievement" percent={business.pmjdy.percent} icon={TrendingUp}
@@ -236,6 +313,10 @@ export default function Dashboard() {
           label="Inactive CSPs" value={business.inactiveCsps.toLocaleString()} icon={UserX} tone="rose"
           sub={`${business.inactivePercent}% of all CSPs`}
         />
+      </div>
+
+      <div className="mt-6">
+        <OutgoingLevelDashboard />
       </div>
 
       <div className="mt-6">
@@ -303,6 +384,11 @@ export default function Dashboard() {
             <div>
               <div className="flex items-center gap-1.5 text-xs text-ink-500"><Mail className="h-3.5 w-3.5" strokeWidth={2} />Opened Today</div>
               <div className="mt-1 text-xl font-semibold text-ink-900">{openPct}%</div>
+              <div className="mt-0.5 text-xs text-ink-400">
+                {operations.openToday.total === 0
+                  ? "no recent sends"
+                  : `${operations.openToday.opened} of ${operations.openToday.total} recent`}
+              </div>
             </div>
           </div>
         </Card>
@@ -331,6 +417,8 @@ export default function Dashboard() {
           )}
         </Card>
       </div>
+      </>
+      )}
     </div>
   );
 }

@@ -32,7 +32,16 @@ def _build_sqlite_engine() -> Engine:
     sqlite_path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(
         f"sqlite:///{sqlite_path}",
-        connect_args={"check_same_thread": False},
+        # timeout: how long a connection waits for a write lock to clear
+        # before raising "database is locked" — this app has a background
+        # APScheduler thread doing its own writes (audit logs, autosend
+        # state) every minute, fully independent of request threads, so
+        # brief write overlaps with a real HTTP request are expected, not
+        # exceptional. The sqlite3 driver's own default (5s) wasn't enough
+        # — a real login request 500'd with "database is locked" during
+        # this session. 30s comfortably covers a batch write without
+        # masking a genuinely stuck lock.
+        connect_args={"check_same_thread": False, "timeout": 30},
         pool_pre_ping=True,
     )
 
@@ -40,6 +49,12 @@ def _build_sqlite_engine() -> Engine:
     def _set_sqlite_pragma(dbapi_connection, _):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        # WAL lets readers proceed while a write is in progress (the
+        # default rollback-journal mode blocks everyone during a write) —
+        # directly reduces how often the scheduler thread and a request
+        # thread contend for the same lock in the first place.
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
         cursor.close()
 
     ACTIVE_DB_BACKEND = "sqlite"
@@ -135,6 +150,15 @@ def _run_lightweight_migrations() -> None:
         ("email_logs", "tracking_token", "VARCHAR(64)"),
         ("email_logs", "opened_at", "DATETIME"),
         ("email_logs", "open_count", "INTEGER"),
+        ("incoming_emails", "replied", "BOOLEAN"),
+        ("incoming_emails", "replied_at", "DATETIME"),
+        ("incoming_emails", "recipient_kind", "VARCHAR(10)"),
+        ("incoming_emails", "matched_reply_template_id", "INTEGER"),
+        ("incoming_emails", "match_confidence", "FLOAT"),
+        ("sent_emails", "replied", "BOOLEAN"),
+        ("sent_emails", "replied_at", "DATETIME"),
+        ("incoming_emails", "triage_tier", "VARCHAR(10)"),
+        ("incoming_emails", "triage_intent", "VARCHAR(60)"),
     ]
 
     with engine.begin() as conn:
@@ -196,6 +220,8 @@ def init_db() -> None:
     import database.incoming_models  # noqa: F401
     import database.org_models  # noqa: F401
     import database.report_source_models  # noqa: F401
+    import database.snapshot_models  # noqa: F401
+    import database.suggestion_models  # noqa: F401
 
     _drop_stale_empty_tables()
     Base.metadata.create_all(bind=get_engine())

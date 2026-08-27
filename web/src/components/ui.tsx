@@ -50,21 +50,27 @@ export function KpiCard({
           <Icon className="h-4 w-4" strokeWidth={2.25} />
         </div>
       </div>
-      <div className="mt-3 text-3xl font-semibold tracking-tight text-ink-900">{value}</div>
+      <div className="mt-3 font-mono text-3xl font-semibold tracking-tight tabular-nums text-ink-900">{value}</div>
     </Card>
   );
 }
 
+// Status chip: soft fill + matching line + dot — the Eko Factory design
+// system's "honest state, at a glance" pattern (good/warn/bad/info),
+// applied over this app's existing slate/green/red/amber/blue tone names
+// so no caller needs to change.
 export function Badge({ children, tone = "slate" }: { children: ReactNode; tone?: "slate" | "green" | "red" | "amber" | "blue" }) {
-  const toneClasses: Record<string, string> = {
-    slate: "bg-ink-100 text-ink-600",
-    green: "bg-emerald-50 text-emerald-700",
-    red: "bg-rose-50 text-rose-700",
-    amber: "bg-amber-50 text-amber-700",
-    blue: "bg-sky-50 text-sky-700",
+  const toneClasses: Record<string, { chip: string; dot: string }> = {
+    slate: { chip: "bg-ink-100 text-ink-600 border-ink-200", dot: "bg-ink-400" },
+    green: { chip: "bg-good-soft text-good-fg border-good-line", dot: "bg-good-fg" },
+    red: { chip: "bg-bad-soft text-bad-fg border-bad-line", dot: "bg-bad-fg" },
+    amber: { chip: "bg-warn-soft text-warn-fg border-warn-line", dot: "bg-warn-fg" },
+    blue: { chip: "bg-info-soft text-info-fg border-info-line", dot: "bg-info-fg" },
   };
+  const { chip, dot } = toneClasses[tone];
   return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${toneClasses[tone]}`}>
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${chip}`}>
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
       {children}
     </span>
   );

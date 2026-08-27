@@ -35,7 +35,7 @@ import base64
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Iterable
@@ -125,6 +125,8 @@ class ParsedMessage:
     body_text: str | None
     received_at: datetime | None
     attachments: list[dict] = field(default_factory=list)  # {name, mime, data(bytes)}
+    to_header: str | None = None
+    cc_header: str | None = None
 
 
 @dataclass
@@ -197,6 +199,38 @@ def _walk_parts(payload) -> tuple[str, list[dict]]:
     return body_text.strip(), attachments
 
 
+def _utc_received_at(msg: dict, headers: dict) -> datetime | None:
+    """Naive UTC receive time for a message.
+
+    Prefers Gmail's own `internalDate` (epoch ms — unambiguous, and what
+    thread_has_reply already compares against). Falls back to the Date
+    header, CONVERTED to UTC rather than merely stripped of its offset.
+
+    The strip-without-convert this replaces silently produced a column with
+    two different meanings: mail from a +0530 sender stored correct IST wall
+    time, while mail from a +0000 sender stored UTC — so an email that
+    really arrived 12:54 IST displayed as 07:24, 5.5 hours early. Everything
+    else in this app stores naive UTC (datetime.utcnow), so UTC is the one
+    convention worth having here.
+    """
+    if msg.get("internalDate"):
+        try:
+            return datetime.utcfromtimestamp(int(msg["internalDate"]) / 1000)
+        except Exception:  # noqa: BLE001
+            pass
+    if headers.get("date"):
+        try:
+            dt = parsedate_to_datetime(headers["date"])
+            if dt is None:
+                return None
+            if dt.tzinfo is not None:
+                return dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt  # already naive; assume UTC
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
 def fetch_message(service, message_id: str) -> ParsedMessage:
     msg = service.users().messages().get(userId=GMAIL_USER_ID, id=message_id, format="full").execute()
     payload = msg.get("payload", {})
@@ -218,14 +252,7 @@ def fetch_message(service, message_id: str) -> ParsedMessage:
                 data_bytes = _decode_part(att["data"])
         attachments.append({"name": a["name"], "mime": a["mime"], "data": data_bytes})
 
-    received_at = None
-    if headers.get("date"):
-        try:
-            received_at = parsedate_to_datetime(headers["date"])
-            if received_at and received_at.tzinfo:
-                received_at = received_at.replace(tzinfo=None)
-        except Exception:  # noqa: BLE001
-            received_at = None
+    received_at = _utc_received_at(msg, headers)
 
     return ParsedMessage(
         gmail_message_id=msg["id"],
@@ -236,7 +263,164 @@ def fetch_message(service, message_id: str) -> ParsedMessage:
         body_text=body_text,
         received_at=received_at,
         attachments=attachments,
+        to_header=headers.get("to"),
+        cc_header=headers.get("cc"),
     )
+
+
+def fetch_message_headers(service, message_id: str) -> tuple[str | None, str | None]:
+    """Lightweight (To, Cc) header fetch — no body/attachments — for
+    backfilling recipient_kind on already-ingested rows without repeating
+    a full fetch_message() call."""
+    msg = (
+        service.users().messages()
+        .get(userId=GMAIL_USER_ID, id=message_id, format="metadata", metadataHeaders=["To", "Cc"])
+        .execute()
+    )
+    headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
+    return headers.get("to"), headers.get("cc")
+
+
+def fetch_message_id_header(service, message_id: str) -> str | None:
+    """Lightweight fetch of the RFC `Message-ID` header (distinct from
+    Gmail's own opaque message id) — needed as the In-Reply-To/References
+    value when building a real threaded reply. No body/attachments work."""
+    msg = (
+        service.users().messages()
+        .get(userId=GMAIL_USER_ID, id=message_id, format="metadata", metadataHeaders=["Message-ID"])
+        .execute()
+    )
+    headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
+    return headers.get("message-id")
+
+
+# Extra addresses this mailbox legitimately receives on besides its own
+# login address — shared team aliases, distribution groups, etc. Comma
+# separated in GMAIL_ACCOUNT_ALIASES.
+#
+# This matters more than it looks: without it, every message delivered via
+# a team alias matches neither To nor Cc, lands in "unknown", and is then
+# silently EXCLUDED from all the direct-mail analysis (triage, subject
+# patterns, automation candidates — all scoped to recipient_kind == "to").
+# A real 60-message sample of this mailbox's "unknown" bucket was 98%
+# team-alias mail, not genuinely-unaddressable mail.
+GMAIL_ACCOUNT_ALIASES = [
+    a.strip().lower() for a in os.getenv("GMAIL_ACCOUNT_ALIASES", "").split(",") if a.strip()
+]
+
+
+def classify_recipient_kind(to_header: str | None, cc_header: str | None, account_email: str | None) -> str:
+    """"to" if the connected account (or one of its configured aliases) is a
+    direct recipient, "cc" if it only appears in Cc, "unknown" if neither
+    header could be matched (e.g. no address resolved, or a Bcc-only
+    delivery). To wins over Cc when both match — being directly addressed
+    is the stronger signal."""
+    needles = list(GMAIL_ACCOUNT_ALIASES)
+    if account_email:
+        needles.append(account_email.strip().lower())
+    if not needles:
+        return "unknown"
+
+    to_l, cc_l = (to_header or "").lower(), (cc_header or "").lower()
+    if any(n in to_l for n in needles):
+        return "to"
+    if any(n in cc_l for n in needles):
+        return "cc"
+    return "unknown"
+
+
+# ----------------------------------------------------------------------
+# Reply detection — read-only, no draft/send involved.
+# ----------------------------------------------------------------------
+def thread_has_reply(service, thread_id: str, after: datetime | None = None) -> tuple[bool, datetime | None]:
+    """True + the send time of the earliest GENUINE reply on this thread —
+    a SENT-labeled message strictly after `after` (the incoming message's
+    received_at). Without `after`, falls back to "any SENT message exists"
+    — kept only for callers that don't have a timestamp to compare against.
+
+    Passing `after` matters: a thread can carry a SENT message from BEFORE
+    the incoming message arrived (e.g. a bounce/delay notice replying to an
+    email you originally sent) — counting that as "we replied to this"
+    is a false positive. internalDate (Gmail's own delivery timestamp,
+    epoch ms) is used in preference to the Date header, since the header
+    is client-supplied and less reliable for ordering."""
+    if not thread_id:
+        return False, None
+    thread = (
+        service.users().threads()
+        .get(userId=GMAIL_USER_ID, id=thread_id, format="metadata", metadataHeaders=["Date"])
+        .execute()
+    )
+    genuine_replies: list[datetime] = []
+    for msg in thread.get("messages", []):
+        if "SENT" not in (msg.get("labelIds") or []):
+            continue
+        sent_at = None
+        if msg.get("internalDate"):
+            try:
+                sent_at = datetime.utcfromtimestamp(int(msg["internalDate"]) / 1000)
+            except Exception:  # noqa: BLE001
+                sent_at = None
+        if sent_at is None:
+            headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
+            if headers.get("date"):
+                try:
+                    sent_at = parsedate_to_datetime(headers["date"])
+                    if sent_at and sent_at.tzinfo:
+                        sent_at = sent_at.replace(tzinfo=None)
+                except Exception:  # noqa: BLE001
+                    sent_at = None
+        if sent_at is None:
+            continue
+        if after is not None and sent_at <= after:
+            continue  # sent before the incoming message — not a reply to it
+        genuine_replies.append(sent_at)
+    if not genuine_replies:
+        return False, None
+    return True, min(genuine_replies)
+
+
+def thread_has_incoming_reply(service, thread_id: str, after: datetime | None = None) -> tuple[bool, datetime | None]:
+    """Mirror of thread_has_reply for the opposite direction: given a
+    message WE sent, checks whether the recipient replied back — a message
+    on the same thread that does NOT carry Gmail's own SENT label (i.e. it
+    arrived from someone else), with a timestamp strictly after `after`
+    (the sent message's own send time). Same internalDate-preferred timing
+    logic as thread_has_reply, for the same reliability reason."""
+    if not thread_id:
+        return False, None
+    thread = (
+        service.users().threads()
+        .get(userId=GMAIL_USER_ID, id=thread_id, format="metadata", metadataHeaders=["Date"])
+        .execute()
+    )
+    genuine_replies: list[datetime] = []
+    for msg in thread.get("messages", []):
+        if "SENT" in (msg.get("labelIds") or []):
+            continue  # one of our own outgoing messages, not a reply
+        received_at = None
+        if msg.get("internalDate"):
+            try:
+                received_at = datetime.utcfromtimestamp(int(msg["internalDate"]) / 1000)
+            except Exception:  # noqa: BLE001
+                received_at = None
+        if received_at is None:
+            headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
+            if headers.get("date"):
+                try:
+                    received_at = parsedate_to_datetime(headers["date"])
+                    if received_at and received_at.tzinfo:
+                        received_at = received_at.replace(tzinfo=None)
+                except Exception:  # noqa: BLE001
+                    received_at = None
+        if received_at is None:
+            continue
+        if after is not None and received_at <= after:
+            continue  # received before we sent it — not a reply to this message
+        genuine_replies.append(received_at)
+    if not genuine_replies:
+        return False, None
+    return True, min(genuine_replies)
 
 
 # ----------------------------------------------------------------------
@@ -383,8 +567,13 @@ def get_default_signature(service) -> str:
 
 def build_mime_message(
     to_email: str, subject: str, body_html: str, attachment_path: str | None = None,
-    cc_emails: str | None = None,
+    cc_emails: str | None = None, in_reply_to: str | None = None, references: str | None = None,
 ):
+    """`in_reply_to`/`references` take the ORIGINAL message's RFC
+    `Message-ID` header value (not Gmail's own opaque message id) —
+    setting these is what makes the recipient's own mail client (Outlook,
+    not just Gmail) thread this as a reply on the original conversation
+    instead of a new, unrelated email."""
     from email.mime.application import MIMEApplication
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
@@ -394,6 +583,10 @@ def build_mime_message(
     if cc_emails:
         mime["Cc"] = cc_emails
     mime["Subject"] = subject
+    if in_reply_to:
+        mime["In-Reply-To"] = in_reply_to
+    if references:
+        mime["References"] = references
     mime.attach(MIMEText(body_html, "html"))
 
     if attachment_path:
@@ -419,10 +612,19 @@ def send_message(
 
 def create_outbound_draft(
     service, to_email: str, subject: str, body_html: str, attachment_path: str | None = None,
-    cc_emails: str | None = None,
+    cc_emails: str | None = None, in_reply_to: str | None = None, references: str | None = None,
+    thread_id: str | None = None,
 ) -> str:
-    """Create a Gmail draft (with optional attachment) instead of sending directly. Returns the draft id."""
-    mime = build_mime_message(to_email, subject, body_html, attachment_path, cc_emails)
+    """Create a Gmail draft (with optional attachment) instead of sending
+    directly. Returns the draft id. Pass `thread_id` (Gmail's own thread
+    id) plus `in_reply_to`/`references` (the original message's RFC
+    Message-ID) together to make this a real threaded reply rather than a
+    new standalone email — thread_id groups it correctly in the sender's
+    own Gmail view, the headers make the recipient's client thread it too."""
+    mime = build_mime_message(to_email, subject, body_html, attachment_path, cc_emails, in_reply_to, references)
     raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("utf-8")
-    draft = service.users().drafts().create(userId=GMAIL_USER_ID, body={"message": {"raw": raw}}).execute()
+    message_body: dict = {"raw": raw}
+    if thread_id:
+        message_body["threadId"] = thread_id
+    draft = service.users().drafts().create(userId=GMAIL_USER_ID, body={"message": message_body}).execute()
     return draft.get("id", "")

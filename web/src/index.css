@@ -1,30 +1,61 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Devanagari:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
+/*
+ * Eko Kiosk theme (retheme 2026-08-26, replacing the earlier Eko Bharat
+ * Ventures "Eko Factory" tokens) — palette and type sampled directly from
+ * kiosk.eko.in computed styles: brand-500/700 anchor its button blue
+ * (#0092cc) and header teal (#00668f); gold anchors its amber accent
+ * (#efb839); ink-100/900 anchor its cream body background (#f5f1eb) and
+ * near-black ink (#0c1217). Every component already references the brand
+ * and ink token families only, so retheming here cascades app-wide with no per-component
+ * changes. Semantic good/warn/bad/info tones are left untouched — they are
+ * functional status colors (success/warning/error), not brand identity.
+ */
 @theme {
-  --font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-sans: "Inter", "IBM Plex Sans Devanagari", "Segoe UI", system-ui, sans-serif;
+  --font-heading: "Plus Jakarta Sans", "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
 
-  --color-brand-50: #eef2ff;
-  --color-brand-100: #e0e7ff;
-  --color-brand-200: #c7d2fe;
-  --color-brand-300: #a5b4fc;
-  --color-brand-400: #818cf8;
-  --color-brand-500: #6366f1;
-  --color-brand-600: #4f46e5;
-  --color-brand-700: #4338ca;
-  --color-brand-800: #3730a3;
-  --color-brand-900: #312e81;
+  --color-brand-50: #eef8fc;
+  --color-brand-100: #d7eef6; /* --brand-soft */
+  --color-brand-200: #aedcee;
+  --color-brand-300: #7cc5e2;
+  --color-brand-400: #3aa8d0;
+  --color-brand-500: #0092cc; /* --brand — kiosk.eko.in button blue */
+  --color-brand-600: #0080b3;
+  --color-brand-700: #00668f; /* --brand-strong — kiosk.eko.in header teal */
+  --color-brand-800: #005170;
+  --color-brand-900: #073c52;
 
-  --color-ink-50: #f8fafc;
-  --color-ink-100: #f1f5f9;
-  --color-ink-200: #e2e8f0;
-  --color-ink-300: #cbd5e1;
-  --color-ink-400: #94a3b8;
-  --color-ink-500: #64748b;
-  --color-ink-600: #475569;
-  --color-ink-700: #334155;
-  --color-ink-800: #1e293b;
-  --color-ink-900: #0f172a;
-  --color-ink-950: #020617;
+  --color-gold: #efb839; /* kiosk.eko.in amber accent */
+
+  --color-ink-50: #e6f2f5; /* --bg — soft teal-blue wash, kiosk.eko.in accent tint */
+  --color-ink-100: #f5f1eb; /* --surface-2 — kiosk.eko.in body background */
+  --color-ink-200: #e6e0d6; /* --line */
+  --color-ink-300: #cfc7b8; /* --line-strong */
+  --color-ink-400: #9d968a;
+  --color-ink-500: #6f6860; /* --ink-mute */
+  --color-ink-600: #4f4941;
+  --color-ink-700: #34302a; /* --ink-soft */
+  --color-ink-800: #1c1a17;
+  --color-ink-900: #0c1217; /* --ink — kiosk.eko.in near-black text */
+  --color-ink-950: #070a0d;
+
+  /* Semantic families — soft fill + fg + line, per the kit status-chip
+     pattern (good/warn/bad/info). Used by Badge chip tones. */
+  --color-good-fg: #127a38;
+  --color-good-soft: #e2f2e7;
+  --color-good-line: #bfe0cb;
+  --color-warn-fg: #8a6410;
+  --color-warn-soft: #faf1dd;
+  --color-warn-line: #ecdcae;
+  --color-bad-fg: #c0392b;
+  --color-bad-soft: #fbe7e3;
+  --color-bad-line: #eebcb4;
+  --color-info-fg: #2452c0;
+  --color-info-soft: #e4eafa;
+  --color-info-line: #c7d3f2;
 }
 
 :root {

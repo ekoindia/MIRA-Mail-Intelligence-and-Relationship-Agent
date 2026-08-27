@@ -9,6 +9,7 @@ import Templates from "./pages/Templates";
 import Scheduler from "./pages/Scheduler";
 import DeliveryLogs from "./pages/DeliveryLogs";
 import AuditLogs from "./pages/AuditLogs";
+import Suggestions from "./pages/Suggestions";
 import SettingsPage from "./pages/Settings";
 
 const queryClient = new QueryClient({
@@ -41,6 +42,7 @@ export default function App() {
               <Route path="/scheduler" element={<Scheduler />} />
               <Route path="/delivery-logs" element={<DeliveryLogs />} />
               <Route path="/audit-logs" element={<AuditLogs />} />
+              <Route path="/suggestions" element={<Suggestions />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           </Routes>

@@ -90,15 +90,11 @@ def send_report_now(db, rm: ReportMaster, user: dict, force_draft: bool = False)
         for r in refs
     ]
 
-    # Freshly-added RBO/AO addresses are still a small, unverified subset —
-    # force draft-only for this send whenever any of them are included,
-    # regardless of the report's stored Draft Only / Send Directly setting
-    # or the caller's own force_draft. LHO/Branch/Corporate Center recipients
-    # in the same job are unaffected by this rule elsewhere; today it just
-    # happens that RBO-only reports (e.g. Account Opening (Daily)) end up
-    # fully drafted, since 100% of their recipients are RBO right now.
-    if any(r.recipient_type in (OrgLevel.RBO.value, OrgLevel.AO.value) for r in recipients):
-        force_draft = True
+    # force_draft is caller-controlled only: the manual per-report "Draft
+    # Only" action passes force_draft=True; everything else (Send-by-
+    # frequency "send" mode, the daily autosend cycle) passes False and
+    # gets whatever rm.delivery_mode says, for every recipient level
+    # including RBO/AO — no blanket override here anymore.
 
     job = create_distribution_job(
         db, upload_id=latest_upload.id, template_id=rm.default_template_id,

@@ -6,6 +6,7 @@ import {
   CalendarClock,
   Send,
   History,
+  Sparkles,
   Settings as SettingsIcon,
   LogOut,
 } from "lucide-react";
@@ -20,6 +21,7 @@ const NAV_ITEMS = [
   { to: "/scheduler", label: "Scheduler", icon: CalendarClock },
   { to: "/delivery-logs", label: "Delivery Logs", icon: Send },
   { to: "/audit-logs", label: "Audit Logs", icon: History },
+  { to: "/suggestions", label: "Suggestions", icon: Sparkles },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
@@ -36,10 +38,10 @@ export default function Layout() {
     <div className="flex h-screen w-full overflow-hidden bg-ink-50">
       <aside className="flex w-64 shrink-0 flex-col border-r border-ink-200 bg-white">
         <div className="flex items-center gap-2.5 px-5 py-5">
-          <EkoLogo className="h-7 w-auto" />
+          <EkoLogo className="h-9 w-auto rounded" />
           <div>
-            <div className="text-sm font-semibold leading-tight text-ink-900">Reporting Console</div>
-            <div className="text-xs leading-tight text-ink-400">Eko Bharat Ventures</div>
+            <div className="text-sm font-semibold leading-tight text-ink-900">MIRA</div>
+            <div className="text-xs leading-tight text-ink-400">Eko Kiosk</div>
           </div>
         </div>
 

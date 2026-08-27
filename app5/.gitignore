@@ -2,10 +2,12 @@
 __pycache__/
 *.pyc
 data/*.db
+data/*.db-shm
+data/*.db-wal
 uploads/reports/*
 uploads/masters/*
 uploads/reports_auto/*
-logs/*.log
+logs/*
 .venv/
 venv/
 *.egg-info/
@@ -13,3 +15,14 @@ venv/
 credentials.json
 data/gmail_token.json
 data/incoming_attachments/*
+
+# One-off / dated maintenance scripts — not part of the app, don't accumulate them
+delete_stale_*.py
+
+# Local render/debug dumps produced by ad-hoc test runs, not by the app itself
+daily_body.json
+daily_rendered.html
+weekly_body.json
+weekly_rendered.html
+monthly_body.json
+monthly_rendered.html

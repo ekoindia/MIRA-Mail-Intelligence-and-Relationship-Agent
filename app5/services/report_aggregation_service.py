@@ -94,7 +94,12 @@ def filter_for_recipient(
     """
     level = OrgLevel(org_level) if not isinstance(org_level, OrgLevel) else org_level
 
-    if level == OrgLevel.CORP:
+    if level in (OrgLevel.CORP, OrgLevel.INTERNAL):
+        # Neither maps to a subset of calling-sheet rows — Corporate
+        # Center gets the whole sheet by long-standing convention;
+        # INTERNAL-level reports (e.g. SBI Kiosk Growth) don't use this
+        # df at all, their own aggregator sources data independently, so
+        # what's returned here is never actually read.
         return df
 
     email_col = _RECIPIENT_EMAIL_COLUMN.get(level)
@@ -123,6 +128,16 @@ def _pct(achieved: float, target: float) -> float:
     if not target:
         return 0.0
     return round((achieved / target) * 100, 1)
+
+
+def _bar_pct(pct: float) -> float:
+    """A progress-bar fill can't exceed its own box — cap at 100 for the
+    `width:{{...}}%` style value ONLY. The plain *_Percent key keeps the
+    real (possibly >100%) figure for the number shown next to the bar;
+    every template uses this capped twin (*_BarPercent) for the bar's
+    width instead so an over-achieving CSP/RBO doesn't render a bar that
+    spills out of its rounded pill container."""
+    return min(100.0, pct)
 
 
 def _fmt_num(v: float) -> str:
@@ -185,6 +200,10 @@ def aggregate_sss(df: pd.DataFrame) -> dict:
         "PMJJBY_Percent": _pct(int(df["mtd_pmjjby"].sum()), int(df["target_pmjjby"].sum())),
         "PMSBY_Percent": _pct(int(df["mtd_pmsby"].sum()), int(df["target_pmsby"].sum())),
         "APY_Percent": _pct(int(df["mtd_apy"].sum()), int(df["target_apy"].sum())),
+        # Capped twins for the progress-bar width — see _bar_pct.
+        "PMJJBY_BarPercent": _bar_pct(_pct(int(df["mtd_pmjjby"].sum()), int(df["target_pmjjby"].sum()))),
+        "PMSBY_BarPercent": _bar_pct(_pct(int(df["mtd_pmsby"].sum()), int(df["target_pmsby"].sum()))),
+        "APY_BarPercent": _bar_pct(_pct(int(df["mtd_apy"].sum()), int(df["target_apy"].sum()))),
         "CSP_Count": len(df),
         # Generic keys for "Daily RBO Update" / "Weekly Consolidated RBO/LHO".
         # "%" is embedded in the value itself (not hardcoded in the template)
@@ -214,6 +233,8 @@ def aggregate_account_opening(df: pd.DataFrame) -> dict:
         "PMJDY_MTD_Achievement": mtd,
         "PMJDY_FTD_Achievement": ftd,
         "PMJDY_MTD_Percent": _pct(mtd, target),
+        # Capped twin for the progress-bar width — see _bar_pct.
+        "PMJDY_MTD_BarPercent": _bar_pct(_pct(mtd, target)),
         "CSP_Count": len(df),
         "Target_Achievement_Percent": f"{_pct(mtd, target)}%",
         "MTD_FTD_Achievement": f"{mtd} MTD / {ftd} FTD",
@@ -252,8 +273,22 @@ def aggregate_account_opening_and_sss(df: pd.DataFrame) -> dict:
 
 
 def inactive_csps_only(df: pd.DataFrame) -> pd.DataFrame:
-    """Attachment filter for the Inactive CSPs report — inactive rows only."""
-    return df[df["terminal_status"].astype(str).str.strip().str.casefold() != "active"]
+    """
+    Attachment filter for the Inactive CSPs report — inactive rows only.
+
+    A blank Terminal Status means "not recorded", NOT "inactive". Filtering on
+    `!= "active"` alone swept those blanks in: the live sheet holds 494
+    Active, 42 Inactive and 1 blank, and the report was stating 43 inactive
+    CSPs while also listing that blank row as an "Unspecified" circle in the
+    distribution breakdown. Blanks are now excluded, so the figure reflects
+    only CSPs the sheet actually flags.
+
+    Any other non-blank value still counts as inactive, so a future status
+    like "Suspended" is included rather than silently dropped.
+    """
+    status = df["terminal_status"].astype(str).str.strip()
+    recorded = ~status.str.casefold().isin(["", "nan", "none"])
+    return df[recorded & (status.str.casefold() != "active")]
 
 
 def aggregate_inactive_csps(df: pd.DataFrame) -> dict:
@@ -277,25 +312,109 @@ def aggregate_inactive_csps(df: pd.DataFrame) -> dict:
         "Reactivated": "No data available",
         "Circle_Distribution": _distribution_str(circle_dist),
         "Action_Plan": "See attached CSP-wise remarks for outreach status.",
+        # Not a template placeholder — read via {{#if INACT_Has_Data}} to
+        # skip this section only when this recipient has no CSPs in scope
+        # at all (genuinely nothing to compute). Unlike Loan Lead
+        # Generation, a real, computed "0 inactive CSPs" IS reportable —
+        # it's a meaningful result, not missing data — so it's shown, not
+        # skipped.
+        "Has_Data": len(df) > 0,
     }
+
+
+_LOAN_TYPE_PAIR_RE = re.compile(r"([A-Za-z][A-Za-z ]*?)-(\d+)")
+
+
+def _parse_loan_type_counts(df: pd.DataFrame) -> dict[str, int]:
+    """
+    Sum lead counts per loan type from the free-text "Type on loan" column.
+    A single cell can list more than one type this CSP generated leads for
+    this month — e.g. "Agri Loan-1, Personal Loan-5" — so each cell is
+    split on comma and every "Type-Count" pair is parsed individually
+    rather than treating the whole cell as one category.
+    """
+    totals: dict[str, int] = {}
+    for cell in df["loan_type_detail"].dropna().astype(str):
+        for name, count in _LOAN_TYPE_PAIR_RE.findall(cell):
+            name = name.strip()
+            if not name:
+                continue
+            totals[name] = totals.get(name, 0) + int(count)
+    return totals
+
+
+_TABLE_CELL = 'style="border: 1px solid #999; padding: 6px 10px;"'
+
+
+def _render_csp_lead_rows(df: pd.DataFrame) -> str:
+    """
+    One <tr> per CSP with at least one loan lead this month — CSP Code,
+    CSP Name, Link Branch, Branch Code (read by column header name, same
+    "Branch Code" column calling_sheet_service resolves for every other
+    report — see col["branch_code"]), Count of loan lead generated (MTD),
+    Types of leads. Unlike the rest of this report's fields, this is
+    inherently a per-recipient VARIABLE-length list (however many CSPs
+    had a lead), so it can't be represented as fixed {{Variable}}
+    placeholders the way the summary line above it is — the template
+    supplies its own literal table header text and this one placeholder
+    for the data rows.
+    """
+    leads_df = df[df["loan_lead_count_curr"].fillna(0) > 0]
+    rows = []
+    for _, row in leads_df.iterrows():
+        code = str(row["csp_code"]) if pd.notna(row["csp_code"]) else ""
+        name = str(row["csp_name"]) if pd.notna(row["csp_name"]) else ""
+        branch = str(row["branch_name"]) if pd.notna(row["branch_name"]) else ""
+        branch_code = str(row["branch_code"]) if pd.notna(row["branch_code"]) else ""
+        count = int(row["loan_lead_count_curr"])
+        loan_type = str(row["loan_type_detail"]) if pd.notna(row["loan_type_detail"]) else "-"
+        rows.append(
+            f"<tr><td {_TABLE_CELL}>{code}</td><td {_TABLE_CELL}>{name}</td>"
+            f"<td {_TABLE_CELL}>{branch}</td><td {_TABLE_CELL}>{branch_code}</td>"
+            f"<td {_TABLE_CELL}>{count}</td><td {_TABLE_CELL}>{loan_type}</td></tr>"
+        )
+    return "".join(rows)
 
 
 def aggregate_loan_lead_generation(df: pd.DataFrame) -> dict:
     total_leads = int(df["loan_lead_count_curr"].sum())
+    target = int(df["target_loan_lead"].sum())
     csps_with_leads = int((df["loan_lead_count_curr"].fillna(0) > 0).sum())
     non_responders = max(len(df) - csps_with_leads, 0)
+    type_counts = _parse_loan_type_counts(df)
 
     return {
         "Loan_Lead_Count": total_leads,
+        "Loan_Lead_Target": target,
+        "Loan_Lead_Percent": _pct(total_leads, target),
         "CSPs_With_Leads": csps_with_leads,
         "Total_CSP_Count": len(df),
-        # Generic keys for "Weekly Loan Lead Generation"
+        # Generic keys for "Weekly Loan Lead Generation" / combined digests
         "Leads_Generated": total_leads,
+        "Leads_Target": target,
+        "Leads_Achievement_Percent": f"{_pct(total_leads, target)}%",
+        # Numeric, capped twin for the progress-bar width (see _bar_pct) —
+        # unlike Leads_Achievement_Percent above, this one is NOT a string
+        # with "%" baked in, since the template appends its own "%" after
+        # {{...}} for the width value; reusing the string version there
+        # was producing invalid CSS ("width:70.2%%").
+        "Leads_Achievement_BarPercent": _bar_pct(_pct(total_leads, target)),
+        # Genuinely untracked: the sheet's paired "Status" column (meant for
+        # approved/disbursed/rejected outcomes) is blank on every single row
+        # with a lead this month — not a bug, just nothing recorded yet.
         "Leads_Converted": "No data available",
-        "Lead_Type": "No data available",
+        "Lead_Type": _distribution_str(type_counts),
         "Active_Lead_CSPs": csps_with_leads,
         "Non_Responders": non_responders,
         "Level_Breakdown": f"{len(df)} CSP(s) in scope",
+        # Per-CSP breakdown table body — see _render_csp_lead_rows.
+        "CSP_Rows": _render_csp_lead_rows(df),
+        # Not a template placeholder — read by combined_digest_service to
+        # decide whether this recipient gets a Loan Lead Generation section
+        # at all (per explicit instruction: skip the report entirely for
+        # any RBO/Branch/LHO with zero leads this month, rather than
+        # showing an all-zero section).
+        "Has_Leads": total_leads > 0,
     }
 
 
