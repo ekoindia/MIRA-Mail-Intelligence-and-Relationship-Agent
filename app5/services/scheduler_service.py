@@ -42,11 +42,18 @@ def get_scheduler() -> BackgroundScheduler:
             id="auto_distribution_poller", replace_existing=True,
         )
 
-        from services.autosend_service import check_and_run_daily_autosend
+        from services.autosend_service import (
+            check_and_run_daily_autosend,
+            check_and_run_sbi_kiosk_growth_autosend,
+        )
 
         _scheduler.add_job(
             check_and_run_daily_autosend, "interval", minutes=1,
             id="daily_autosend_poller", replace_existing=True,
+        )
+        _scheduler.add_job(
+            check_and_run_sbi_kiosk_growth_autosend, "interval", minutes=1,
+            id="sbi_kiosk_growth_autosend_poller", replace_existing=True,
         )
 
         from services.weekly_autosend_service import check_and_run_weekly_autosend

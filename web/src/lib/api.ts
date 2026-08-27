@@ -1,6 +1,10 @@
 import axios from "axios";
 
-export const API_BASE = "http://127.0.0.1:8000";
+// Production build (rack server, served under /mira/ by nginx) talks to the
+// backend same-origin via the /mira/api/ proxy path — see vite.config.ts's
+// build-only base and the nginx location block that pairs with it. Local
+// dev keeps hitting the backend directly on :8000, unchanged.
+export const API_BASE = import.meta.env.PROD ? "/mira" : "http://127.0.0.1:8000";
 
 export const api = axios.create({ baseURL: API_BASE });
 

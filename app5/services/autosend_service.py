@@ -47,6 +47,7 @@ from datetime import datetime, timedelta
 from config import settings
 from database.db import get_db
 from database.models import AppSetting, ReportMaster
+from database.org_models import OrgLevel
 from services.automation_settings_service import (
     WEEKDAY_NAMES,
     get_autosend_enabled,
@@ -62,6 +63,18 @@ logger = get_logger(__name__)
 # can't be a synthetic placeholder id. Seeded once (users.username =
 # "autosend_scheduler", is_active=False so it can never actually log in).
 _SYSTEM_USER = {"id": 2, "username": "autosend_scheduler"}
+
+# SBI Kiosk — Onboarding & Growth (Daily) is a Daily ReportMaster like any
+# other, but its aggregator (team_calling_summary_service.
+# get_sbi_kiosk_growth_context) is only registered in combined_digest_
+# service._UNIT_AGGREGATORS, not report_aggregation_service.AGGREGATORS —
+# send_report_now would find no aggregator for it and draft an empty email
+# with unrendered template variables. Routed separately below instead, via
+# the same combined_digest_service.send_combined_digest path the mapping
+# page already uses for its manual trigger. Enabled 2026-08-28 per explicit
+# instruction ("kal se... wahi same logic jo daily report ka tha") — see
+# [[project_sbi_kiosk_growth_report]].
+_SBI_KIOSK_REPORT_PREFIX = "SBI Kiosk"
 
 _KEY_LAST_CHECK_AT = "autosend_last_check_at"
 _KEY_LAST_SENT_DATE = "autosend_last_sent_date"
@@ -152,6 +165,9 @@ def check_and_run_daily_autosend() -> None:
             .filter(
                 ReportMaster.org_levels.isnot(None), ReportMaster.org_levels != "",
                 ReportMaster.frequency == "Daily",
+                # SBI Kiosk routes through combined_digest_service below
+                # instead — see _SBI_KIOSK_REPORT_PREFIX above.
+                ~ReportMaster.report_name.like(f"{_SBI_KIOSK_REPORT_PREFIX}%"),
             )
             .order_by(ReportMaster.report_name)
             .all()
@@ -180,3 +196,111 @@ def check_and_run_daily_autosend() -> None:
             "Autosend: daily run complete for %s — sent=%s skipped=%s failed=%s",
             today_str, sent, skipped, failed,
         )
+
+
+# ---------------------------------------------------------------------------
+# SBI Kiosk — Onboarding & Growth (Daily) — a separate poller, not folded
+# into check_and_run_daily_autosend above, because it has TWO independent
+# sources to wait on (the Calling Sheet for Calling/WhatsApp/Voice/Camp, the
+# Circle 1A85 Admin Dashboard for the Growth section — see
+# services/circle_dashboard_freshness_service.py), and its own recipient
+# (sbikiosk@eko.co.in) — a stall on either source, or on this report's own
+# recheck state, must never block or be blocked by the other Daily reports'
+# shared _KEY_LAST_SENT_DATE/_KEY_LAST_CHECK_AT flags above. Same fetch/
+# freshness-recheck/send timing shape as check_and_run_daily_autosend,
+# against its own state keys. Enabled 2026-08-28 per explicit instruction
+# ("kal se... wahi same logic jo daily report ka tha", then "growth k liye
+# bhi freshness check kar lena daily") — see
+# [[project_sbi_kiosk_growth_report]].
+# ---------------------------------------------------------------------------
+
+_SBI_KEY_LAST_CHECK_AT = "sbikiosk_autosend_last_check_at"
+_SBI_KEY_LAST_SENT_DATE = "sbikiosk_autosend_last_sent_date"
+
+
+def check_and_run_sbi_kiosk_growth_autosend() -> None:
+    now = datetime.now()
+    today_str = now.date().isoformat()
+    fetch_h, fetch_m = _parse_hhmm(settings.autosend_fetch_time)
+    send_h, send_m = _parse_hhmm(settings.autosend_send_time)
+    fetch_due_at = now.replace(hour=fetch_h, minute=fetch_m, second=0, microsecond=0)
+    send_due_at = now.replace(hour=send_h, minute=send_m, second=0, microsecond=0)
+
+    with get_db() as db:
+        if not get_autosend_enabled(db):
+            return
+
+        skip_days = get_autosend_skip_weekdays(db)
+        if now.weekday() in skip_days:
+            return  # same no-send-day rule as the main Daily cycle, logged there already
+
+        if _get_setting(db, _SBI_KEY_LAST_SENT_DATE) == today_str:
+            return  # already sent today
+
+        if now < fetch_due_at:
+            return  # not yet fetch time
+
+        # BOTH sources must be confirmed fresh today — Calling Sheet (shared
+        # gate, same one every other Daily report uses) for the Calling/
+        # WhatsApp/Voice/Camp tables, and the Circle dashboard (this
+        # report's own gate) for the Growth section. Either one still
+        # showing yesterday's data holds the whole email back and retries
+        # on the same recheck cadence as the main cycle.
+        from services.circle_dashboard_freshness_service import (
+            check_freshness as check_dashboard_freshness,
+            is_confirmed_fresh_today as dashboard_confirmed_fresh_today,
+        )
+
+        sheet_fresh_today = is_confirmed_fresh_today(db)
+        dashboard_fresh_today = dashboard_confirmed_fresh_today(db)
+
+        if not (sheet_fresh_today and dashboard_fresh_today):
+            last_check_raw = _get_setting(db, _SBI_KEY_LAST_CHECK_AT)
+            last_check_at = datetime.fromisoformat(last_check_raw) if last_check_raw else None
+            recheck_due = (
+                last_check_at is None
+                or last_check_at.date().isoformat() != today_str
+                or now >= last_check_at + timedelta(minutes=settings.autosend_recheck_minutes)
+            )
+            if not recheck_due:
+                return
+
+            _set_setting(db, _SBI_KEY_LAST_CHECK_AT, now.isoformat())
+
+            if not sheet_fresh_today:
+                sheet_fresh_today, reason = check_freshness(db)
+                if not sheet_fresh_today:
+                    logger.info(
+                        "SBI Kiosk autosend: %s Rechecking in %s minutes.",
+                        reason, settings.autosend_recheck_minutes,
+                    )
+                    db.flush()
+                    return
+
+            if not dashboard_fresh_today:
+                dashboard_fresh_today, reason = check_dashboard_freshness(db)
+                if not dashboard_fresh_today:
+                    logger.info(
+                        "SBI Kiosk autosend: %s Rechecking in %s minutes.",
+                        reason, settings.autosend_recheck_minutes,
+                    )
+                    db.flush()
+                    return
+
+            logger.info("SBI Kiosk autosend: both Calling Sheet and Circle dashboard confirmed fresh for today.")
+
+        if now < send_due_at:
+            return  # fresh, but still waiting for the scheduled send window
+
+        from services.combined_digest_service import send_combined_digest
+
+        try:
+            result = send_combined_digest(db, "Daily", OrgLevel.INTERNAL, _SYSTEM_USER, force_draft=False)
+            logger.info("SBI Kiosk autosend: sent — %s", result)
+        except ValueError as exc:
+            logger.info("SBI Kiosk autosend: skipped — %s", exc)
+        except Exception:  # noqa: BLE001
+            logger.exception("SBI Kiosk autosend: send failed.")
+
+        _set_setting(db, _SBI_KEY_LAST_SENT_DATE, today_str)
+        db.flush()

@@ -129,7 +129,7 @@ export function Table({ children }: { children: ReactNode }) {
   );
 }
 
-export function Th({ children }: { children: ReactNode }) {
+export function Th({ children }: { children?: ReactNode }) {
   return <th className="border-b border-ink-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-ink-500">{children}</th>;
 }
 
