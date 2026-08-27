@@ -26,7 +26,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <BrowserRouter basename={import.meta.env.PROD ? "/mira" : undefined}>
+        <BrowserRouter>
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route
