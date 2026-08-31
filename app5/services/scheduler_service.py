@@ -71,12 +71,12 @@ def get_scheduler() -> BackgroundScheduler:
         )
 
         _scheduler.add_job(
-            check_and_run_incoming_sync, "interval", minutes=5,
+            check_and_run_incoming_sync, "interval", minutes=1,
             id="incoming_sync_poller", replace_existing=True,
         )
         logger.info(
             "Scheduler started with 1-minute pollers (manual + auto-distribution + daily autosend "
-            "+ weekly autosend), a 30-minute suggestions poller, and a 5-minute incoming-mail sync "
+            "+ weekly autosend), a 30-minute suggestions poller, a 1-minute incoming-mail sync "
             "poller (off by default)."
         )
     return _scheduler

@@ -15,6 +15,10 @@ venv/
 credentials.json
 data/gmail_token.json
 data/incoming_attachments/*
+# Real uploaded business data (payout/commission sheets etc, contains PAN /
+# bank account / IFSC — real PII). NEVER track this, whatever feature writes
+# to it. Caught 2026-08-31 after one slipped into a commit via `git add -A`.
+data/agent_uploads/*
 
 # One-off / dated maintenance scripts — not part of the app, don't accumulate them
 delete_stale_*.py

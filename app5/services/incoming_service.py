@@ -824,7 +824,11 @@ def get_recent_incoming(limit: int = 15) -> list[dict]:
         )
         return [
             {
-                "Timestamp": r.received_at or r.created_at,
+                # _utc_iso, not the raw datetime — a naive UTC datetime
+                # serialized without a "Z" suffix gets parsed as *local*
+                # time by the browser, shifting the displayed time by
+                # +5:30 in IST (this exact bug, caught 2026-08-31).
+                "Timestamp": _utc_iso(r.received_at or r.created_at),
                 "Report Type": r.report_type or "—",
                 "LHO": r.lho_name or "—",
                 "Level": r.level or "—",
