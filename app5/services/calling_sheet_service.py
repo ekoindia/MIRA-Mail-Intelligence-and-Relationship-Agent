@@ -168,9 +168,18 @@ def _resolve_columns(header: _HeaderIndex) -> dict:
     """
     col: dict = {}
 
+    # CSP Code's header cell was live-edited on the sheet 2026-09-02 (caught
+    # mid-edit at one point reading the stray "p"), settling on "CSP ID" —
+    # per explicit instruction, treat that as the same column rather than
+    # hard-failing every report over a rename. Tries the original name
+    # first so this is a no-op the day the sheet reverts, if it ever does.
+    csp_code_idx = header.field_indices(field="CSP Code") or header.field_indices(field="CSP ID")
+    if not csp_code_idx:
+        raise CallingSheetError("Calling Sheet column not found: CSP Code (tried 'CSP Code' and 'CSP ID')")
+    col["csp_code"] = csp_code_idx[0]
+
     # --- Identity / hierarchy (unique field names, no group) ---
     identity = {
-        "csp_code": "CSP Code",
         "csp_name": "CSP Name",
         "csp_email": "CSP Mail ID",
         "rm_email": "Email of RM",
@@ -180,7 +189,6 @@ def _resolve_columns(header: _HeaderIndex) -> dict:
         "rbo": "RBO",
         "lho": "Circle (LHO)",
         "terminal_status": "Terminal Status",
-        "csp_score": "CSP Score",
         # DC's own name — was previously unresolved (only "Email ID DC" /
         # dc_email existed); added 2026-08-27 for the SBI Kiosk Growth
         # Report's Physical Camp table, which is organised by DC rather
@@ -192,7 +200,14 @@ def _resolve_columns(header: _HeaderIndex) -> dict:
 
     # Newly-added per-level contact emails (may not exist on an older copy
     # of the sheet — resolved as optional so a missing column degrades
-    # gracefully instead of hard-failing the whole fetch).
+    # gracefully instead of hard-failing the whole fetch). "CSP Score" moved
+    # here 2026-09-02: it was wrongly bundled into the strict `identity`
+    # group above, so its absence from the live sheet was hard-failing
+    # EVERY report's load_calling_sheet() call — including Account Opening
+    # (Daily), which never reads it at all. Only aggregate_csp_income_impact
+    # (Monthly) actually uses csp_score, and it already handles a fully-NaN
+    # column gracefully (empty score distribution), so resolving it as
+    # optional here is safe end to end.
     for key, field in {
         "circle_head_email": "Circle Head Email",
         "branch_email": "Branch Email",
@@ -200,6 +215,7 @@ def _resolve_columns(header: _HeaderIndex) -> dict:
         "rbo_email": "RBO Email",
         "ao_email": "AO Email ID",
         "dc_email": "Email ID DC",
+        "csp_score": "CSP Score",
     }.items():
         matches = header.field_indices(field=field)
         col[key] = matches[0] if matches else None
