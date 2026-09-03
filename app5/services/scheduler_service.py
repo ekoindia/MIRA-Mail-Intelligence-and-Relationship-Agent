@@ -161,11 +161,15 @@ def check_and_run_due_schedules() -> None:
 
 
 def check_and_run_incoming_sync() -> None:
-    """Poller: no-ops unless explicitly enabled (Settings toggle, off by
-    default). When enabled, mirrors POST /api/incoming/sync exactly —
-    create_drafts hardcoded False, detect-and-score only, never drafts/sends.
-    Also scans the Sent folder (same toggle — one "is inbox syncing on"
-    switch covers both directions rather than adding a second one)."""
+    """Poller: executes limit forward cycle, ticket auto-closing, and ack drafting
+    (each governed by its own independent toggle / safety rules), then runs
+    full inbox ingest and sent-mail scanning if incoming_sync_enabled is on."""
+    # Always run ticket auto-closing and limit forward / ack cycles first.
+    # These functions check their own toggles (e.g. get_limit_forward_enabled)
+    # and safely no-op when disabled.
+    _run_limit_forward_cycle()
+    _run_incoming_ack_cycle()
+
     from services.automation_settings_service import get_incoming_sync_enabled
     from services.incoming_service import (
         backfill_recipient_kind, backfill_triage, ingest_new_messages,
@@ -203,9 +207,6 @@ def check_and_run_incoming_sync() -> None:
         logger.info("Sent-mail sync poller: %s, reply_backfilled=%d", sent_summary, sent_reply_backfilled)
     except Exception:  # noqa: BLE001
         logger.exception("Sent-mail sync poller failed.")
-
-    _run_limit_forward_cycle()
-    _run_incoming_ack_cycle()
 
 
 def _run_incoming_ack_cycle() -> None:

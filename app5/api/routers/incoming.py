@@ -152,6 +152,14 @@ def sync_now(user: dict = Depends(get_current_user)):
     # Also local-only, and insert-only (never reopens/closes an existing
     # task), so it's safe to run unattended on every sync.
     tasks_extracted = svc.sync_extracted_tasks()
+
+    # Also run limit forward cycle and ticket closing on sync
+    try:
+        from services.scheduler_service import _run_limit_forward_cycle
+        _run_limit_forward_cycle()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Limit forward cycle during manual sync failed: %s", exc)
+
     return {
         "ingest": ingest_summary, "replies_updated": replies_updated,
         "recipient_kind_backfilled": recipient_kind_backfilled,

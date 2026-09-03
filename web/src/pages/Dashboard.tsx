@@ -211,7 +211,7 @@ function ViewToggle({
 export default function Dashboard() {
   const queryClient = useQueryClient();
   const [view, setView] = useState<"outgoing" | "incoming">("outgoing");
-  const { data, isLoading, isFetching } = useQuery<DashboardData>({
+  const { data, isLoading, isFetching, error } = useQuery<DashboardData>({
     queryKey: ["dashboard"],
     queryFn: async () => (await api.get("/api/dashboard")).data,
     refetchInterval: REFRESH_MS,
@@ -220,7 +220,33 @@ export default function Dashboard() {
   const relativeSync = useRelativeTime(data?.lastSynced);
   const incomingLive = useIncomingLive();
 
-  if (isLoading || !data) return <LoadingBlock />;
+  if (isLoading) return <LoadingBlock />;
+
+  if (error || !data) {
+    const errorMsg =
+      (error as any)?.response?.data?.detail ||
+      (error as any)?.message ||
+      "The backend server is currently unreachable. Please verify that the API server is running.";
+    return (
+      <div className="py-12">
+        <EmptyState
+          title="Unable to load dashboard"
+          subtitle={errorMsg}
+          icon={AlertTriangle}
+        />
+        <div className="mt-4 flex justify-center">
+          <button
+            type="button"
+            onClick={() => queryClient.invalidateQueries({ queryKey: ["dashboard"] })}
+            className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-700"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const { business, rboLeaderboard, lhoLeaderboard, automationStatus, operations } = data;
   const openPct = operations.openToday.total > 0

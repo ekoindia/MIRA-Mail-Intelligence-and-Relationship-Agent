@@ -302,16 +302,40 @@ def _resolve_columns(header: _HeaderIndex) -> dict:
     return col
 
 
+_SHEET_CACHE: dict[tuple[str, str], tuple[float, pd.DataFrame]] = {}
+_SHEET_CACHE_TTL_SECONDS = 30
+
+
+def clear_calling_sheet_cache() -> None:
+    _SHEET_CACHE.clear()
+
+
 def load_calling_sheet(
-    sheet_id: str = DEFAULT_SHEET_ID, tab: str = DEFAULT_TAB
+    sheet_id: str = DEFAULT_SHEET_ID, tab: str = DEFAULT_TAB, force_fresh: bool = False,
 ) -> pd.DataFrame:
     """
     Fetch the Calling Sheet and return it as a DataFrame with stable,
     friendly column names — resolved fresh from the sheet's current header
     every call (see _resolve_columns), so the result stays correct even
     after the live sheet's columns are inserted, removed, or reordered.
+    Includes a 30s TTL cache so frequent dashboard reloads do not hammer Google Sheets.
     """
-    values = fetch_calling_sheet_raw(sheet_id, tab)
+    import time
+    cache_key = (sheet_id, tab)
+    now = time.time()
+    if not force_fresh and cache_key in _SHEET_CACHE:
+        cached_time, cached_df = _SHEET_CACHE[cache_key]
+        if now - cached_time < _SHEET_CACHE_TTL_SECONDS:
+            return cached_df.copy()
+
+    try:
+        values = fetch_calling_sheet_raw(sheet_id, tab)
+    except Exception as exc:
+        if cache_key in _SHEET_CACHE:
+            logger.warning("Failed to fetch fresh Calling Sheet (%s); returning cached copy.", exc)
+            return _SHEET_CACHE[cache_key][1].copy()
+        raise
+
     width = max(len(row) for row in values)
     header = _HeaderIndex(values[0], values[1], width)
     resolved = _resolve_columns(header)
@@ -349,7 +373,8 @@ def load_calling_sheet(
     for c in numeric_cols:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    return df
+    _SHEET_CACHE[cache_key] = (now, df)
+    return df.copy()
 
 
 def filter_by_rbo(df: pd.DataFrame, rbo_name: str) -> pd.DataFrame:
