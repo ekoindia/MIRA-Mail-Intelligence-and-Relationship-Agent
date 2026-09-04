@@ -159,6 +159,7 @@ def _run_lightweight_migrations() -> None:
         ("sent_emails", "replied_at", "DATETIME"),
         ("incoming_emails", "triage_tier", "VARCHAR(10)"),
         ("incoming_emails", "triage_intent", "VARCHAR(60)"),
+        ("email_logs", "csp_breakdown_json", "TEXT"),
     ]
 
     with engine.begin() as conn:
@@ -217,6 +218,7 @@ def init_db() -> None:
     # Additive: register the incoming-email, org-hierarchy and report-source
     # tables on the same metadata so create_all() builds them alongside
     # (never altering) the existing schema.
+    import database.agent_mail_models  # noqa: F401
     import database.incoming_models  # noqa: F401
     import database.org_models  # noqa: F401
     import database.report_source_models  # noqa: F401

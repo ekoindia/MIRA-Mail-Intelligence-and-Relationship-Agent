@@ -222,6 +222,15 @@ class EmailLog(Base):
     opened_at = Column(DateTime, nullable=True)
     open_count = Column(Integer, default=0)
 
+    # Per-scheme (PMJDY/APY/PMSBY/PMJJBY) target/MTD/FTD + per-CSP rows,
+    # snapshotted at send time (see report_aggregation_service.
+    # build_csp_metric_breakdown) — the "click a metric card" detail page
+    # (api/routers/report_detail.py) reads this instead of re-querying the
+    # live sheet, so it always matches what this specific email said, even
+    # if clicked much later. NULL for reports that don't have this card
+    # layout, or emails sent before this feature existed.
+    csp_breakdown_json = Column(Text, nullable=True)
+
     job = relationship("DistributionJob", back_populates="email_logs")
 
 

@@ -248,6 +248,49 @@ def aggregate_account_opening(df: pd.DataFrame) -> dict:
     }
 
 
+_METRIC_COLUMNS: dict[str, tuple[str, str, str, str]] = {
+    "PMJDY": ("mtd_pmjdy", "ftd_pmjdy", "target_pmjdy", "PMJDY (Account Opening)"),
+    "APY": ("mtd_apy", "ftd_apy", "target_apy", "Atal Pension Yojana"),
+    "PMSBY": ("mtd_pmsby", "ftd_pmsby", "target_pmsby", "PM Suraksha Bima Yojana"),
+    "PMJJBY": ("mtd_pmjjby", "ftd_pmjjby", "target_pmjjby", "PM Jeevan Jyoti Bima Yojana"),
+}
+
+
+def build_csp_metric_breakdown(df: pd.DataFrame) -> dict:
+    """
+    Per-scheme (PMJDY/APY/PMSBY/PMJJBY) target/MTD/FTD + per-CSP rows for
+    THIS recipient's rows, snapshotted at send time and stored on
+    EmailLog.csp_breakdown_json (see segmented_distribution_service.py and
+    combined_digest_service.py) so the "click a metric card" detail page
+    (api/routers/report_detail.py) shows exactly what the recipient's
+    email said — not a live re-query that could drift from it by the time
+    they click.
+    """
+    breakdown = {}
+    for metric, (mtd_col, ftd_col, target_col, label) in _METRIC_COLUMNS.items():
+        active = df[df[mtd_col].fillna(0) > 0].sort_values(mtd_col, ascending=False)
+        rows = [
+            {
+                "csp_code": str(row["csp_code"]) if pd.notna(row["csp_code"]) else "",
+                "csp_name": str(row["csp_name"]) if pd.notna(row["csp_name"]) else "",
+                "branch_name": str(row["branch_name"]) if pd.notna(row["branch_name"]) else "",
+                "mtd": int(row[mtd_col]) if pd.notna(row[mtd_col]) else 0,
+                "ftd": int(row[ftd_col]) if pd.notna(row[ftd_col]) else 0,
+            }
+            for _, row in active.iterrows()
+        ]
+        breakdown[metric] = {
+            "metric_label": label,
+            "target": int(df[target_col].sum()),
+            "mtd_achievement": int(df[mtd_col].sum()),
+            "ftd_achievement": int(df[ftd_col].sum()),
+            "csp_count": len(df),
+            "csps_with_activity": len(rows),
+            "rows": rows,
+        }
+    return breakdown
+
+
 def aggregate_account_opening_and_sss(df: pd.DataFrame) -> dict:
     """
     Account Opening and Social Security Scheme now go out as ONE email per

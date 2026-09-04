@@ -330,6 +330,8 @@ def run_distribution_job(
     for i in range(0, total, batch_size):
         batch = pending_logs[i : i + batch_size]
         for log_row in batch:
+            if not log_row.tracking_token:
+                log_row.tracking_token = secrets.token_urlsafe(16)
             context = {
                 "Recipient_Name": log_row.recipient_name,
                 "Branch_Name": log_row.recipient_name if log_row.recipient_type == "Branch" else "",
@@ -337,6 +339,16 @@ def run_distribution_job(
                 "AO_Name": log_row.recipient_name if log_row.recipient_type == "AO" else "",
                 "LHO_Name": log_row.lho_name or (log_row.recipient_name if log_row.recipient_type == "LHO" else ""),
                 "Corp_Name": log_row.recipient_name if log_row.recipient_type == "Corporate Center" else "",
+                # Used to build the "click a metric card for CSP-wise detail"
+                # links (see services/report_detail_service.py) — the token
+                # doubles as the public detail page's only credential, same
+                # as the tracking pixel above. Empty Base_URL (PUBLIC_BASE_URL
+                # unset, e.g. local dev) means the {{#if Has_Public_Url}}
+                # guard in the template hides the links rather than emitting
+                # dead/localhost links a real recipient could never open.
+                "Tracking_Token": log_row.tracking_token,
+                "Base_URL": settings.public_base_url,
+                "Has_Public_Url": bool(settings.public_base_url),
                 **shared_context,
             }
             if log_row.context_override_json:
@@ -350,8 +362,6 @@ def run_distribution_job(
                 # every automated email now ends with the connected
                 # account's real Gmail signature instead of a hardcoded one.
                 body += gmail_signature
-            if not log_row.tracking_token:
-                log_row.tracking_token = secrets.token_urlsafe(16)
             body = _inject_tracking_pixel(body, log_row.tracking_token)
             # "" is an explicit "no attachment" marker (segmented_distribution_service
             # uses it — the filled-in template body is the whole report, no

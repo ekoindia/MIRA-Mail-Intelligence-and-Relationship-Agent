@@ -16,8 +16,8 @@ from pydantic import BaseModel
 
 from api.auth import get_current_user, login as auth_login
 from api.routers import (
-    automation, dashboard, gmail, incoming, logs, org_units, reports, schedules, sources, suggestions, templates,
-    tracking,
+    agent, automation, dashboard, gmail, incoming, logs, org_units, report_detail, reports, schedules, sources,
+    suggestions, templates, tracking,
 )
 from database.db import init_db
 from services.scheduler_service import get_scheduler
@@ -71,9 +71,11 @@ app.include_router(schedules.router)
 app.include_router(logs.router)
 app.include_router(gmail.router)
 app.include_router(tracking.router)
+app.include_router(report_detail.router)
 app.include_router(automation.router)
 app.include_router(suggestions.router)
 app.include_router(incoming.router)
+app.include_router(agent.router)
 
 
 @app.get("/api/health")

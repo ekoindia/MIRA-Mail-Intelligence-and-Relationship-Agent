@@ -102,6 +102,16 @@ class Settings:
     autosend_send_time: str = os.getenv("AUTOSEND_SEND_TIME", "10:30")
     autosend_recheck_minutes: int = _int("AUTOSEND_RECHECK_MINUTES", 60)
 
+    # Agent fleet. MIRA is the mail layer for external report agents (e.g.
+    # the BC Payout agent): they pull incoming mail and hand back finished
+    # files, MIRA writes and drafts the actual mail. Agents authenticate on
+    # /api/agent/* with this shared token.
+    #
+    # EMPTY MEANS DISABLED, not "open": with no token configured the whole
+    # agent surface refuses every request. A blank secret must never turn
+    # into an unauthenticated door onto the mailbox.
+    agent_service_token: str = os.getenv("AGENT_SERVICE_TOKEN", "")
+
     # Default admin bootstrap
     default_admin_username: str = os.getenv("DEFAULT_ADMIN_USERNAME", "admin")
     default_admin_password: str = os.getenv("DEFAULT_ADMIN_PASSWORD", "Admin@12345")

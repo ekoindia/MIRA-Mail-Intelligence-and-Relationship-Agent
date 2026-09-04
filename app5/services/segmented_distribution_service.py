@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from database.models import DistributionJob
 from services.calling_sheet_service import load_calling_sheet
-from services.report_aggregation_service import AGGREGATORS, filter_for_recipient
+from services.report_aggregation_service import AGGREGATORS, build_csp_metric_breakdown, filter_for_recipient
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -34,6 +34,13 @@ logger = get_logger(__name__)
 # not just PMJDY — the daily email would just be an empty table, so that
 # RBO is skipped entirely (no draft, no send) per explicit instruction.
 _DAILY_FTD_KEYS = ("AO_PMJDY_FTD_Achievement", "SSS_APY_FTD", "SSS_PMSBY_FTD", "SSS_PMJJBY_FTD")
+
+
+# Reports whose template has the 4 clickable PMJDY/APY/PMSBY/PMJJBY cards
+# (see report_aggregation_service.build_csp_metric_breakdown) — only these
+# get a csp_breakdown_json snapshot; every other Calling-Sheet report keeps
+# working exactly as before.
+_CARD_METRIC_REPORTS = {"Account Opening (Daily)"}
 
 
 def _all_daily_schemes_zero(context: dict) -> bool:
@@ -97,6 +104,8 @@ def apply_segmented_overrides(db: Session, job: DistributionJob, report_name: st
         context = aggregator(recipient_df)
         log_row.attachment_override_path = ""  # explicit "no attachment", not "unset"
         log_row.context_override_json = json.dumps(context)
+        if report_name in _CARD_METRIC_REPORTS:
+            log_row.csp_breakdown_json = json.dumps(build_csp_metric_breakdown(recipient_df))
 
     db.flush()
     logger.info(

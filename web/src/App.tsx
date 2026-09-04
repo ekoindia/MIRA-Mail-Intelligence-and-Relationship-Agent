@@ -11,6 +11,7 @@ import DeliveryLogs from "./pages/DeliveryLogs";
 import AuditLogs from "./pages/AuditLogs";
 import Suggestions from "./pages/Suggestions";
 import SettingsPage from "./pages/Settings";
+import ReportDetail from "./pages/ReportDetail";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -29,6 +30,7 @@ export default function App() {
         <BrowserRouter basename={import.meta.env.PROD ? "/mira" : undefined}>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/report-detail" element={<ReportDetail />} />
             <Route
               element={
                 <ProtectedRoute>
