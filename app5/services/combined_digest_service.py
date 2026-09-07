@@ -50,6 +50,10 @@ from services.report_aggregation_service import (
     aggregate_dfs_incentive_slab,
     aggregate_inactive_csps,
     aggregate_loan_lead_generation,
+    build_csp_income_breakdown,
+    build_csp_metric_snapshot,
+    build_inactive_csp_breakdown,
+    build_loan_lead_csp_snapshot,
     filter_for_recipient,
 )
 from services.team_calling_summary_service import get_sbi_kiosk_growth_context
@@ -357,6 +361,10 @@ def send_combined_digest(
             load_two_previous_contexts(db, before=today)
         )
 
+    has_ao_report = any(r.report_name == "Account Opening (Weekly)" for r in reports)
+    has_ll_report = any(r.report_name == "Loan Lead Generation (Weekly)" for r in reports)
+    has_income_report = any(r.report_name == "CSP Income Impact (Monthly)" for r in reports)
+    has_inactive_report = any(r.report_name == "Inactive CSPs (Weekly)" for r in reports)
     removed = 0
     for log_row in list(job.email_logs):
         recipient_df = filter_for_recipient(df, log_row.recipient_type, log_row.recipient_name, log_row.recipient_email)
@@ -365,6 +373,27 @@ def send_combined_digest(
             db.delete(log_row)
             removed += 1
             continue
+        if frequency == "Weekly" and (has_ao_report or has_ll_report):
+            # Rides along in context_override_json (and, via
+            # snapshot_service, into next week's WeeklyReportSnapshot) so
+            # the "click a metric card" detail page can compute real
+            # per-CSP week-over-week growth later — see
+            # report_aggregation_service.build_csp_metric_snapshot /
+            # build_loan_lead_csp_snapshot and services/report_growth_service.py.
+            snapshot = build_csp_metric_snapshot(recipient_df) if has_ao_report else {}
+            if has_ll_report:
+                snapshot["LL"] = build_loan_lead_csp_snapshot(recipient_df)
+            context["_csp_snapshot"] = snapshot
+        if has_income_report:
+            # Current-vs-previous-month is already on the sheet itself —
+            # no history table needed, just frozen at send time like the
+            # daily breakdown (see report_aggregation_service.
+            # build_csp_income_breakdown).
+            context["_income_snapshot"] = build_csp_income_breakdown(recipient_df)
+        if has_inactive_report:
+            # Point-in-time state, not a flow — see
+            # report_aggregation_service.build_inactive_csp_breakdown.
+            context["_inactive_snapshot"] = build_inactive_csp_breakdown(recipient_df)
         if frequency == "Weekly":
             email_key = (log_row.recipient_email or "").lower()
             apply_growth(

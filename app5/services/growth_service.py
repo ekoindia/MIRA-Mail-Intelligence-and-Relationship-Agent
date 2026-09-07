@@ -179,6 +179,31 @@ def _fmt_isolated_change(current_mtd: float, prev_mtd: float, prev2_mtd: float |
     return f"{base} | {pct:+.1f}% - {verdict}"
 
 
+def _set_chart_pair(context: dict, var: str, older: float, newer: float) -> None:
+    """
+    Alongside the human-readable {var} string, expose the two isolated
+    week values as {var}_Older/{var}_Newer (rounded for display) and each
+    as a 0-100 bar-width percent of whichever is larger — so the weekly
+    email template can render a real two-bar growth/de-growth chart
+    (see email_templates "Weekly RBO/LHO/Branch/Corporate Center Update")
+    instead of only the text sentence. Negative values (e.g. Inactive
+    CSPs improving to a lower count is fine, but an isolated-week delta
+    going negative would be a data anomaly) are clamped to 0 for the bar
+    width only — the displayed number itself is never altered.
+    """
+    max_val = max(abs(older), abs(newer), 1.0)
+    context[f"{var}_Older"] = round(older, 1) if older != int(older) else int(older)
+    context[f"{var}_Newer"] = round(newer, 1) if newer != int(newer) else int(newer)
+    context[f"{var}_Older_BarPercent"] = round(max(0.0, older) / max_val * 100, 1)
+    context[f"{var}_Newer_BarPercent"] = round(max(0.0, newer) / max_val * 100, 1)
+    # A real boolean flag, not the truthiness of *_Older itself — 0 is a
+    # legitimate isolated-week value (e.g. "0 leads last week, 5 this
+    # week"), and {{#if}} treats Python 0 as falsy, which would wrongly
+    # hide the chart on exactly the recipients whose growth story is most
+    # dramatic (zero to something).
+    context[f"{var}_Has_Chart"] = True
+
+
 def _latest_snapshot_date_before(db: Session, before: date | None) -> date | None:
     q = db.query(WeeklyReportSnapshot.report_date).distinct()
     if before is not None:
@@ -339,6 +364,17 @@ def apply_growth(
 
     filled = 0
     for var, (metric_key, higher_is_better, is_cumulative) in relevant.items():
+        # Template engine here supports only ONE non-nested {{#if}} level
+        # (see utils/helpers.py) — the bar-chart rows for every metric live
+        # INSIDE the single {{#if Has_Growth_Comparison}} block, so they
+        # can't each carry their own nested {{#if var_Has_Chart}} guard
+        # (that broke real emails: unresolved {{#if}}/{{/if}} tokens
+        # leaked into the sent HTML — caught 2026-09-07). Default every
+        # relevant metric's chart vars to a flat zero pair up front so the
+        # template always has something to substitute; _set_chart_pair
+        # below overwrites this with the real pair whenever one is
+        # actually computed.
+        _set_chart_pair(context, var, 0.0, 0.0)
         current = context.get(metric_key)
         previous = previous_context.get(metric_key)
         if not isinstance(current, (int, float)) or not isinstance(previous, (int, float)):
@@ -347,6 +383,7 @@ def apply_growth(
 
         if not is_cumulative:
             context[var] = _fmt_change(float(current), float(previous), higher_is_better)
+            _set_chart_pair(context, var, float(previous), float(current))
             filled += 1
             continue
 
@@ -362,6 +399,8 @@ def apply_growth(
                 prev2 = float(candidate)
 
         context[var] = _fmt_isolated_change(float(current), float(previous), prev2, higher_is_better)
+        if prev2 is not None:
+            _set_chart_pair(context, var, float(previous) - prev2, float(current) - float(previous))
         filled += 1
 
     if snapshot_date:

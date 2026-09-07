@@ -291,6 +291,131 @@ def build_csp_metric_breakdown(df: pd.DataFrame) -> dict:
     return breakdown
 
 
+def build_csp_metric_snapshot(df: pd.DataFrame) -> dict:
+    """
+    Per-scheme {csp_code: {csp_name, branch_name, mtd}} for EVERY CSP in
+    scope (unlike build_csp_metric_breakdown, NOT filtered to mtd > 0) —
+    a CSP that drops to zero must still appear so the week-over-week
+    comparison can show that drop, not silently omit it. Stashed on the
+    WEEKLY combined digest's per-recipient context (see
+    combined_digest_service.py) under "_csp_snapshot", so it rides along
+    into EmailLog.context_override_json and, via
+    snapshot_service.save_drafted_report_snapshot, into next week's
+    WeeklyReportSnapshot automatically — see report_growth_service.py,
+    which reads two consecutive weeks of this to compute per-CSP growth
+    for the "click a metric card" weekly detail page.
+    """
+    snapshot = {}
+    for metric, (mtd_col, _ftd_col, _target_col, _label) in _METRIC_COLUMNS.items():
+        snapshot[metric] = {
+            str(row["csp_code"]): {
+                "csp_name": str(row["csp_name"]) if pd.notna(row["csp_name"]) else "",
+                "branch_name": str(row["branch_name"]) if pd.notna(row["branch_name"]) else "",
+                "mtd": int(row[mtd_col]) if pd.notna(row[mtd_col]) else 0,
+            }
+            for _, row in df.iterrows()
+            if pd.notna(row["csp_code"]) and str(row["csp_code"])
+        }
+    return snapshot
+
+
+def build_loan_lead_csp_snapshot(df: pd.DataFrame) -> dict:
+    """
+    {csp_code: {csp_name, branch_name, mtd}} for EVERY CSP in scope (loan
+    leads MTD count), same shape as build_csp_metric_snapshot's per-metric
+    dict so it can be stashed under the same "_csp_snapshot" context key
+    with its own "LL" entry — see combined_digest_service.py. Powers the
+    "click the Leads Generated card" week-over-week CSP growth view on
+    Weekly Corporate Center / RBO / LHO / Branch Update (the report
+    already prints a live CSP-wise table via _render_csp_lead_rows, but
+    that has no history — this is what lets the click-through show
+    whether each CSP's leads grew or shrank vs last week).
+    """
+    return {
+        str(row["csp_code"]): {
+            "csp_name": str(row["csp_name"]) if pd.notna(row["csp_name"]) else "",
+            "branch_name": str(row["branch_name"]) if pd.notna(row["branch_name"]) else "",
+            "mtd": int(row["loan_lead_count_curr"]) if pd.notna(row["loan_lead_count_curr"]) else 0,
+        }
+        for _, row in df.iterrows()
+        if pd.notna(row["csp_code"]) and str(row["csp_code"])
+    }
+
+
+def build_csp_income_breakdown(df: pd.DataFrame) -> dict:
+    """
+    Per-CSP current-month vs previous-month commission, straight off the
+    Calling Sheet's own two columns (no historical snapshot needed — both
+    months are already on the same row). Snapshotted into the Monthly
+    Corporate Center / LHO Update's context (see combined_digest_service.py)
+    under "_income_snapshot" so the "click the Avg CSP Income card" detail
+    page shows exactly what that month's email said. Sorted by delta
+    descending (biggest gainers first) — a CSP with no previous-month
+    figure recorded gets previous_month=0, read as "new this month" rather
+    than silently excluded.
+    """
+    rows = []
+    for _, row in df.iterrows():
+        code = str(row["csp_code"]) if pd.notna(row["csp_code"]) else ""
+        if not code:
+            continue
+        curr = float(row["commission_curr_month"]) if pd.notna(row["commission_curr_month"]) else 0.0
+        prev = float(row["commission_prev_month"]) if pd.notna(row["commission_prev_month"]) else 0.0
+        rows.append({
+            "csp_code": code,
+            "csp_name": str(row["csp_name"]) if pd.notna(row["csp_name"]) else "",
+            "branch_name": str(row["branch_name"]) if pd.notna(row["branch_name"]) else "",
+            "curr_month": round(curr, 2),
+            "prev_month": round(prev, 2),
+            "delta": round(curr - prev, 2),
+        })
+    rows.sort(key=lambda r: r["delta"], reverse=True)
+    return {
+        "csp_count": len(rows),
+        "total_curr": round(sum(r["curr_month"] for r in rows), 2),
+        "total_prev": round(sum(r["prev_month"] for r in rows), 2),
+        "rows": rows,
+    }
+
+
+def build_inactive_csp_breakdown(df: pd.DataFrame) -> dict:
+    """
+    Full per-CSP inactive list + circle distribution, snapshotted into the
+    Weekly LHO/Corporate Center Update's context under "_inactive_snapshot"
+    (see combined_digest_service.py) so the "click the Inactive CSPs /
+    Circle Spread card" detail page shows exactly what that week's email
+    said. A point-in-time state (see growth_service.py's module docstring
+    — inactive count is never de-cumulated/compared as a flow), so this is
+    a plain current-snapshot breakdown, not a growth comparison. Sorted by
+    inactivity_days descending (longest-inactive first) so the most
+    overdue CSPs surface at the top.
+    """
+    inactive = inactive_csps_only(df)
+    circle_dist = inactive["lho"].astype(str).str.strip().replace({"": "Unspecified"}).value_counts().to_dict()
+
+    rows = []
+    for _, row in inactive.iterrows():
+        code = str(row["csp_code"]) if pd.notna(row["csp_code"]) else ""
+        if not code:
+            continue
+        days = row.get("inactivity_days")
+        rows.append({
+            "csp_code": code,
+            "csp_name": str(row["csp_name"]) if pd.notna(row["csp_name"]) else "",
+            "branch_name": str(row["branch_name"]) if pd.notna(row["branch_name"]) else "",
+            "circle": str(row["lho"]).strip() if pd.notna(row["lho"]) and str(row["lho"]).strip() else "Unspecified",
+            "inactivity_days": int(days) if pd.notna(days) else None,
+        })
+    rows.sort(key=lambda r: (r["inactivity_days"] is None, -(r["inactivity_days"] or 0)))
+
+    return {
+        "total_csp_count": len(df),
+        "inactive_count": len(inactive),
+        "circle_distribution": [{"circle": k, "count": int(v)} for k, v in sorted(circle_dist.items(), key=lambda kv: -kv[1])],
+        "rows": rows,
+    }
+
+
 def aggregate_account_opening_and_sss(df: pd.DataFrame) -> dict:
     """
     Account Opening and Social Security Scheme now go out as ONE email per
