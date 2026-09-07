@@ -64,9 +64,9 @@ const METRIC_LABEL: Record<string, string> = {
 const INCOME_THEME = { line: "#f6ad79", fg: "#c1520a", barBg: "#fce9d9" };
 
 function Shell({
-  theme, eyebrow, title, subtitle, isLoading, error, children,
+  eyebrow, title, subtitle, isLoading, error, children,
 }: {
-  theme: { line: string; fg: string; barBg: string }; eyebrow: string; title: string; subtitle?: string;
+  eyebrow: string; title: string; subtitle?: string;
   isLoading: boolean; error: unknown; children?: React.ReactNode;
 }) {
   return (
@@ -105,7 +105,7 @@ function CurrentDetail({ token, metric }: { token: string; metric: string }) {
 
   return (
     <Shell
-      theme={theme} eyebrow="Eko Bharat Ventures · CSP-wise Breakdown"
+      eyebrow="Eko Bharat Ventures · CSP-wise Breakdown"
       title={data ? data.metric_label : METRIC_LABEL[metric] ?? "Loading..."}
       subtitle={data ? `${data.recipient_type}: ${data.recipient_name}` : undefined}
       isLoading={isLoading} error={error}
@@ -186,7 +186,7 @@ function GrowthDetail({ token, metric }: { token: string; metric: string }) {
 
   return (
     <Shell
-      theme={theme} eyebrow="Eko Bharat Ventures · CSP-wise Growth"
+      eyebrow="Eko Bharat Ventures · CSP-wise Growth"
       title={data ? `${METRIC_LABEL[data.metric] ?? data.metric} — Week-over-Week` : METRIC_LABEL[metric] ?? "Loading..."}
       subtitle={data ? `${data.recipient_type}: ${data.recipient_name}` : undefined}
       isLoading={isLoading} error={error}
@@ -294,7 +294,7 @@ function IncomeDetail({ token }: { token: string }) {
 
   return (
     <Shell
-      theme={theme} eyebrow="Eko Bharat Ventures · CSP Income Detail"
+      eyebrow="Eko Bharat Ventures · CSP Income Detail"
       title="CSP Income — Month-over-Month"
       subtitle={data ? `${data.recipient_type}: ${data.recipient_name}` : undefined}
       isLoading={isLoading} error={error}
@@ -394,7 +394,7 @@ function InactiveDetail({ token }: { token: string }) {
 
   return (
     <Shell
-      theme={theme} eyebrow="Eko Bharat Ventures · Inactive CSP Detail"
+      eyebrow="Eko Bharat Ventures · Inactive CSP Detail"
       title="Inactive CSPs — Circle Spread"
       subtitle={data ? `${data.recipient_type}: ${data.recipient_name}` : undefined}
       isLoading={isLoading} error={error}
