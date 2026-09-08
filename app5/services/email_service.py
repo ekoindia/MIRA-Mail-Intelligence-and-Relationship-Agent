@@ -366,6 +366,15 @@ def run_distribution_job(
             # unaffected).
             context["Show_Growth_Hint"] = bool(context.get("Has_Public_Url")) and bool(context.get("Has_Growth_Comparison"))
             context["Show_LL_Growth_Hint"] = context["Show_Growth_Hint"] and bool(context.get("Has_Leads"))
+            # Which detail page the metric cards link to: "growth" shows
+            # week-over-week comparison, "current" shows this week's
+            # numbers only. Weekly emails with no comparison this cycle
+            # (first Monday of the month — see growth_service.py) must
+            # still let the cards click through, just without a
+            # comparison that doesn't exist yet. Daily emails have no
+            # Has_Growth_Comparison key at all, so this defaults to
+            # "current" there too — which is what their cards already use.
+            context["Card_Mode"] = "growth" if context.get("Has_Growth_Comparison") else "current"
             subject = render_template(subject_tpl, context)
             body = render_email_body(body_tpl, context)
             if gmail_signature:
