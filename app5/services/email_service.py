@@ -355,6 +355,17 @@ def run_distribution_job(
                 # Segmented reports (e.g. per-RBO computed target/achievement
                 # figures) override the generic context on a per-recipient basis.
                 context.update(json.loads(log_row.context_override_json))
+            # Combined flags for the "tap a card for growth" hint lines
+            # (templates "Weekly RBO/LHO/Branch Update") — computed here,
+            # not as a nested {{#if}} in the template, because the renderer
+            # (utils/helpers.py) supports only ONE non-nested level per
+            # block. Has_Growth_Comparison only exists once apply_growth has
+            # run (Weekly digests); absent entirely on Daily emails, where
+            # bool(None) correctly evaluates False and the hint stays hidden
+            # there too (Daily's own hint line uses Has_Public_Url alone,
+            # unaffected).
+            context["Show_Growth_Hint"] = bool(context.get("Has_Public_Url")) and bool(context.get("Has_Growth_Comparison"))
+            context["Show_LL_Growth_Hint"] = context["Show_Growth_Hint"] and bool(context.get("Has_Leads"))
             subject = render_template(subject_tpl, context)
             body = render_email_body(body_tpl, context)
             if gmail_signature:
