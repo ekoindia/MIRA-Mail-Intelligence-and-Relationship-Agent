@@ -62,6 +62,7 @@ def get_metric_breakdown(token: str, metric: str) -> dict:
                 "target": data["target"], "mtd_achievement": data["mtd_achievement"],
                 "ftd_achievement": data["ftd_achievement"], "csp_count": data["csp_count"],
                 "csps_with_activity": data["csps_with_activity"], "rows": data["rows"],
+                "has_target": True, "has_ftd": True,
             }
 
         if not log_row.context_override_json:
@@ -71,16 +72,18 @@ def get_metric_breakdown(token: str, metric: str) -> dict:
         if not snapshot:
             raise ReportDetailError("Detailed breakdown isn't available for this metric.")
 
+    # No target and no FTD in this fallback source (_csp_snapshot only ever
+    # carries MTD) — has_target/has_ftd tell the frontend to omit those
+    # entirely rather than show a fabricated "0".
     rows = [
-        {"csp_code": code, "csp_name": v.get("csp_name", ""), "branch_name": v.get("branch_name", ""),
-         "mtd": v.get("mtd", 0), "ftd": 0}
+        {"csp_code": code, "csp_name": v.get("csp_name", ""), "branch_name": v.get("branch_name", ""), "mtd": v.get("mtd", 0)}
         for code, v in snapshot.items() if v.get("mtd", 0) > 0
     ]
     rows.sort(key=lambda r: r["mtd"], reverse=True)
     return {
         "metric": metric, "metric_label": _METRIC_LABELS[metric],
         "recipient_type": recipient_type, "recipient_name": recipient_name,
-        "target": 0, "mtd_achievement": sum(v.get("mtd", 0) for v in snapshot.values()),
-        "ftd_achievement": 0, "csp_count": len(snapshot), "csps_with_activity": len(rows),
-        "rows": rows,
+        "target": None, "mtd_achievement": sum(v.get("mtd", 0) for v in snapshot.values()),
+        "ftd_achievement": None, "csp_count": len(snapshot), "csps_with_activity": len(rows),
+        "rows": rows, "has_target": False, "has_ftd": False,
     }

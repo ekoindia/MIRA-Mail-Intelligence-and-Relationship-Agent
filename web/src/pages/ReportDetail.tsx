@@ -7,7 +7,7 @@ interface DetailRow {
   csp_name: string;
   branch_name: string;
   mtd: number;
-  ftd: number;
+  ftd?: number;
 }
 
 interface DetailResponse {
@@ -15,12 +15,14 @@ interface DetailResponse {
   metric_label: string;
   recipient_type: string;
   recipient_name: string;
-  target: number;
+  target: number | null;
   mtd_achievement: number;
-  ftd_achievement: number;
+  ftd_achievement: number | null;
   csp_count: number;
   csps_with_activity: number;
   rows: DetailRow[];
+  has_target: boolean;
+  has_ftd: boolean;
 }
 
 interface GrowthRow {
@@ -114,9 +116,9 @@ function CurrentDetail({ token, metric }: { token: string; metric: string }) {
         <>
           <div style={{ padding: "20px 20px 8px", display: "flex", gap: 12 }}>
             {[
-              { label: "Target", value: data.target },
+              ...(data.has_target ? [{ label: "Target", value: data.target }] : []),
               { label: "MTD Achievement", value: data.mtd_achievement },
-              { label: "FTD (as sent)", value: data.ftd_achievement },
+              ...(data.has_ftd ? [{ label: "FTD (as sent)", value: data.ftd_achievement }] : []),
             ].map((stat) => (
               <div key={stat.label} style={{ flex: 1, background: "#ffffff", border: `1px solid ${theme.line}`, borderRadius: 10, overflow: "hidden" }}>
                 <div style={{ height: 4, background: theme.fg }} />
@@ -143,7 +145,7 @@ function CurrentDetail({ token, metric }: { token: string; metric: string }) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: "#312b26" }}>
                 <thead>
                   <tr>
-                    {["CSP Code", "CSP Name", "Branch", "MTD", "FTD"].map((h) => (
+                    {["CSP Code", "CSP Name", "Branch", "MTD", ...(data.has_ftd ? ["FTD"] : [])].map((h) => (
                       <th key={h} style={{ borderBottom: `2px solid ${theme.fg}`, padding: "8px 10px", background: theme.barBg, textAlign: "left", fontSize: 11, color: theme.fg, textTransform: "uppercase", letterSpacing: "0.04em" }}>
                         {h}
                       </th>
@@ -157,14 +159,14 @@ function CurrentDetail({ token, metric }: { token: string; metric: string }) {
                       <td style={{ border: "1px solid #e9e2d9", padding: "6px 10px" }}>{r.csp_name}</td>
                       <td style={{ border: "1px solid #e9e2d9", padding: "6px 10px" }}>{r.branch_name}</td>
                       <td style={{ border: "1px solid #e9e2d9", padding: "6px 10px", fontVariantNumeric: "tabular-nums" }}>{r.mtd}</td>
-                      <td style={{ border: "1px solid #e9e2d9", padding: "6px 10px", fontVariantNumeric: "tabular-nums" }}>{r.ftd}</td>
+                      {data.has_ftd && <td style={{ border: "1px solid #e9e2d9", padding: "6px 10px", fontVariantNumeric: "tabular-nums" }}>{r.ftd}</td>}
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
             <div style={{ marginTop: 12, textAlign: "center", fontSize: 11, color: "#7a6f64" }}>
-              {data.csps_with_activity} of {data.csp_count} CSP(s) in scope have activity this month.
+              {data.csps_with_activity} of {data.csp_count} CSP(s) in scope have activity{data.has_ftd ? " this month" : ""}.
             </div>
           </div>
         </>
