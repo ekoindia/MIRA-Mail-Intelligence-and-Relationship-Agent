@@ -132,7 +132,7 @@ def preview(body: PreviewIn, user: dict = Depends(get_current_user)):
     sample = {
         "Recipient_Name": "Rohit Sharma", "Branch_Name": "Connaught Place Branch",
         "RBO_Name": "Lucknow RBO", "AO_Name": "Lucknow AO", "LHO_Name": "Delhi LHO",
-        "Corp_Name": "Corporate Center", "Report_Name": "Weekly Sales Report", "Date": "13-Jul-2026",
+        "Corp_Name": "Corporate Center", "Report_Name": "Progress Report", "Date": "13-Jul-2026",
         "Week_Number": "29", "Week_Start": "13", "Week_End": "19 Jul 2026", "Month_Year": "July 2026",
     }
     # Preview is cosmetic only and never fetches real sheet data — but a
