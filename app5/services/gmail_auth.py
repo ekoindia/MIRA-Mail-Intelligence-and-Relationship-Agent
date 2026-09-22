@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from datetime import datetime
 from pathlib import Path
 
@@ -95,6 +96,116 @@ def get_credentials_info() -> dict:
         }
     except Exception:
         return {"exists": True, "project_id": "unreadable"}
+
+
+# ── Browser-redirect flow (server deployments) ──────────────────────────
+#
+# InstalledAppFlow.run_local_server() (below) needs a browser on the same
+# machine as the backend — fine for local dev, impossible on a headless
+# rack server. A "Web application" type OAuth client (as opposed to the
+# "Desktop app" / "installed" type) lets Google redirect the user's own
+# browser straight back to a public HTTPS URL instead, with no localhost
+# hop and therefore no SSH tunnel needed to reconnect. Both flows share one
+# credentials.json/token.json — which one runs is decided by the client
+# type in credentials.json, not by an explicit setting.
+
+def _credentials_client_type() -> str | None:
+    """'web' or 'installed', from whichever key credentials.json has. None
+    if the file is missing or unreadable."""
+    path = Path(GMAIL_CREDENTIALS_PATH)
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text())
+    except Exception:
+        return None
+    if "web" in raw:
+        return "web"
+    if "installed" in raw:
+        return "installed"
+    return None
+
+
+def oauth_redirect_uri() -> str:
+    from config import settings
+
+    return f"{settings.public_base_url}/api/gmail/oauth-callback"
+
+
+def uses_redirect_flow() -> bool:
+    """True when this deployment should use the browser-redirect flow: a
+    Web-application OAuth client plus a public URL for Google to redirect
+    back to. Without both, fall back to the local-server flow — a Web
+    client with no PUBLIC_BASE_URL has nowhere real to send the redirect."""
+    from config import settings
+
+    return _credentials_client_type() == "web" and bool(settings.public_base_url)
+
+
+# state -> issued-at. In-memory and short-lived (a few minutes between
+# "Connect Gmail" and Google's redirect back) — a restart during that
+# window just means the user retries, so this doesn't need a DB table.
+_pending_states: dict[str, datetime] = {}
+_STATE_TTL_SECONDS = 600
+
+
+def _prune_expired_states() -> None:
+    cutoff = datetime.utcnow().timestamp() - _STATE_TTL_SECONDS
+    for key, issued_at in list(_pending_states.items()):
+        if issued_at.timestamp() < cutoff:
+            _pending_states.pop(key, None)
+
+
+def build_authorization_url() -> str:
+    """Start the redirect flow: the URL to send the user's browser to.
+    Only meaningful when uses_redirect_flow() is True."""
+    from google_auth_oauthlib.flow import Flow
+
+    if not credentials_file_exists():
+        raise RuntimeError(f"credentials.json not found at {GMAIL_CREDENTIALS_PATH}.")
+
+    _prune_expired_states()
+    state = secrets.token_urlsafe(24)
+    _pending_states[state] = datetime.utcnow()
+
+    flow = Flow.from_client_secrets_file(
+        GMAIL_CREDENTIALS_PATH, SCOPES, redirect_uri=oauth_redirect_uri()
+    )
+    # access_type=offline + prompt=consent: without both, Google only
+    # issues a refresh_token on a user's very first-ever consent — a
+    # reconnect after a revoked/expired token would silently hand back an
+    # access-token-only grant that expires again in an hour.
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",
+        prompt="consent",
+        include_granted_scopes="true",
+        state=state,
+    )
+    return auth_url
+
+
+def complete_authorization(code: str, state: str) -> dict:
+    """Finish the redirect flow once Google calls back with a code. Raises
+    ValueError on a missing/expired/replayed state (the CSRF guard, since
+    this endpoint can't require our own bearer-token auth — Google's
+    redirect can't carry it)."""
+    from google_auth_oauthlib.flow import Flow
+
+    _prune_expired_states()
+    if state not in _pending_states:
+        raise ValueError("That connection attempt expired or was already used — click Connect Gmail again.")
+    _pending_states.pop(state, None)
+
+    flow = Flow.from_client_secrets_file(
+        GMAIL_CREDENTIALS_PATH, SCOPES, redirect_uri=oauth_redirect_uri()
+    )
+    flow.fetch_token(code=code)
+
+    token_path = Path(GMAIL_TOKEN_PATH)
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token_path.write_text(flow.credentials.to_json())
+    logger.info("New Gmail token saved to %s (redirect flow)", token_path)
+    return get_connection_status()
 
 
 # ── Token / client ────────────────────────────────────────────────────────

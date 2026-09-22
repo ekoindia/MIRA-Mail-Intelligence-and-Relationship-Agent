@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Mail, CheckCircle2, XCircle, Loader2, Users, Plus, Trash2, Pencil } from "lucide-react";
 import { api, apiErrorMessage } from "../lib/api";
@@ -6,6 +6,7 @@ import { PageHeader, Card, Button, Table, Th, Td, Badge, EmptyState } from "../c
 
 interface GmailStatus {
   connected: boolean; email: string | null; error: string | null;
+  flow_mode: "redirect" | "local_server";
 }
 
 interface OrgUnit {
@@ -170,14 +171,37 @@ export default function Settings() {
     queryFn: async () => (await api.get("/api/gmail/status")).data,
   });
 
+  // Google redirects back to /settings?gmail=connected|error after the
+  // browser-redirect flow (see api/routers/gmail.py's /oauth-callback) —
+  // pick that up once, show it, then drop it from the URL so a page
+  // refresh doesn't re-show a stale result.
+  const [redirectResult, setRedirectResult] = useState<{ ok: boolean; detail: string | null } | null>(null);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const gmail = params.get("gmail");
+    if (!gmail) return;
+    setRedirectResult({ ok: gmail === "connected", detail: params.get("detail") });
+    queryClient.invalidateQueries({ queryKey: ["gmail-status"] });
+    window.history.replaceState({}, "", window.location.pathname);
+  }, [queryClient]);
+
   const connect = useMutation({
     mutationFn: async () => api.post("/api/gmail/connect"),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["gmail-status"] }),
+  });
+  const connectRedirect = useMutation({
+    mutationFn: async () => (await api.get<{ url: string }>("/api/gmail/connect-url")).data,
+    onSuccess: (data) => { window.location.href = data.url; },
   });
   const disconnect = useMutation({
     mutationFn: async () => api.post("/api/gmail/disconnect"),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["gmail-status"] }),
   });
+
+  const isRedirectFlow = data?.flow_mode === "redirect";
+  const connecting = isRedirectFlow ? connectRedirect.isPending : connect.isPending;
+  const connectError = isRedirectFlow ? connectRedirect.error : connect.error;
+  const startConnect = () => (isRedirectFlow ? connectRedirect.mutate() : connect.mutate());
 
   return (
     <div>
@@ -213,9 +237,14 @@ export default function Settings() {
           )}
         </div>
 
-        {connect.isError && (
+        {redirectResult && !redirectResult.ok && (
           <div className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">
-            {apiErrorMessage(connect.error, "Connection failed.")}
+            {redirectResult.detail || "Connection failed."}
+          </div>
+        )}
+        {connectError && (
+          <div className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            {apiErrorMessage(connectError, "Connection failed.")}
           </div>
         )}
 
@@ -225,13 +254,17 @@ export default function Settings() {
               {disconnect.isPending ? "Disconnecting..." : "Disconnect Gmail"}
             </Button>
           ) : (
-            <Button onClick={() => connect.mutate()} disabled={connect.isPending}>
-              {connect.isPending ? "Opening browser..." : "Connect Gmail"}
+            <Button onClick={startConnect} disabled={connecting}>
+              {connecting ? (isRedirectFlow ? "Redirecting to Google..." : "Opening browser...") : "Connect Gmail"}
             </Button>
           )}
         </div>
-        {connect.isPending && (
-          <p className="mt-2 text-xs text-ink-400">A browser window opens on this machine — sign in and approve access there.</p>
+        {connecting && (
+          <p className="mt-2 text-xs text-ink-400">
+            {isRedirectFlow
+              ? "You'll be sent to Google to sign in and approve access, then back here."
+              : "A browser window opens on this machine — sign in and approve access there."}
+          </p>
         )}
       </Card>
 
