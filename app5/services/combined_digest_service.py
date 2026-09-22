@@ -44,6 +44,7 @@ from services.distribution_service import ResolvedRecipient, create_distribution
 from services.email_service import run_distribution_job
 from services.recipient_resolution_service import resolve_recipients_for_levels
 from services.report_aggregation_service import (
+    AGGREGATORS,
     MERGED_INTO_OTHER_REPORT,
     aggregate_account_opening_and_sss,
     aggregate_csp_income_impact,
@@ -129,13 +130,23 @@ def is_automated(report_name: str) -> bool:
 
 
 def is_effectively_automated(report_name: str) -> bool:
-    """Display-purposes check: True for a literal aggregator unit OR a
-    report merged into one (e.g. Social Security Scheme is fully covered
-    by Account Opening's combined aggregator — it isn't "paused", it just
-    doesn't get counted as its own routing unit). Use this wherever a
-    report's automated/paused status is shown to a user; use is_automated
-    for anything that decides which units get sent."""
+    """Display-purposes check: True for a literal combined-digest aggregator
+    unit, a report merged into one (e.g. Social Security Scheme is fully
+    covered by Account Opening's combined aggregator — it isn't "paused",
+    it just doesn't get counted as its own routing unit), OR a report
+    that's automated via the separate standalone-send path (report_
+    aggregation_service.AGGREGATORS / report_send_service.send_report_now)
+    instead of ever being folded into a combined digest — e.g. Loan Lead
+    Approval (Daily), the only automated report at Branch/Daily, which has
+    no reason to ever join _UNIT_AGGREGATORS since it's never combined with
+    anything. Use this wherever a report's automated/paused status is shown
+    to a user; use is_automated for anything that decides which units get
+    sent in a combined digest — that one must stay strict, since
+    _combined_context indexes _UNIT_AGGREGATORS directly and would KeyError
+    on a report that's only in AGGREGATORS."""
     if is_automated(report_name):
+        return True
+    if report_name in AGGREGATORS:
         return True
     target = MERGED_INTO_OTHER_REPORT.get(report_name)
     return target is not None and is_automated(target)
