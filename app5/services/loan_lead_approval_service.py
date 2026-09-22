@@ -25,8 +25,8 @@ from datetime import date
 
 import pandas as pd
 
-from services.report_aggregation_helpers import LOAN_TYPE_PAIR_RE as _LOAN_TYPE_PAIR_RE
 from services.report_aggregation_helpers import distribution_str as _distribution_str
+from services.report_aggregation_helpers import parse_type_counts
 
 # report_name key this whole module is wired under — see AGGREGATORS in
 # report_aggregation_service.py, the snapshot hook in
@@ -35,20 +35,17 @@ from services.report_aggregation_helpers import distribution_str as _distributio
 REPORT_NAME = "Loan Lead Approval (Daily)"
 
 
-def _parse_type_counts_for_row(loan_type_detail) -> dict[str, int]:
-    """Same 'Type-Count, Type-Count' parsing as report_aggregation_service.
-    _parse_loan_type_counts, but for one CSP's own cell instead of summed
-    across a whole dataframe — needed here because the day-over-day delta
-    has to be computed per CSP, per type, before being summed back up."""
-    if not isinstance(loan_type_detail, str) or not loan_type_detail:
-        return {}
-    counts: dict[str, int] = {}
-    for name, count in _LOAN_TYPE_PAIR_RE.findall(loan_type_detail):
-        name = name.strip()
-        if not name:
-            continue
-        counts[name] = counts.get(name, 0) + int(count)
-    return counts
+def _parse_type_counts_for_row(loan_type_detail, *, default_count: int = 1) -> dict[str, int]:
+    """Same parsing as report_aggregation_helpers.parse_type_counts, but
+    for one CSP's own cell instead of summed across a whole dataframe —
+    needed here because the day-over-day delta has to be computed per
+    CSP, per type, before being summed back up. `default_count` should be
+    that CSP's own lead count for this row when known (the fallback path
+    — a bare category label with no per-type count attached — then
+    attributes ALL of that CSP's leads to the one category rather than
+    just 1, which matters once a CSP can have more than one lead a
+    month again)."""
+    return parse_type_counts(loan_type_detail, default_count=default_count)
 
 
 def save_daily_snapshot(db, df: pd.DataFrame, snapshot_date: date) -> int:
@@ -81,7 +78,7 @@ def save_daily_snapshot(db, df: pd.DataFrame, snapshot_date: date) -> int:
         if not code:
             continue
         mtd_count = int(row["loan_lead_count_curr"]) if pd.notna(row["loan_lead_count_curr"]) else 0
-        type_counts = _parse_type_counts_for_row(row.get("loan_type_detail"))
+        type_counts = _parse_type_counts_for_row(row.get("loan_type_detail"), default_count=mtd_count)
 
         existing = (
             db.query(DailyLoanLeadSnapshot)
@@ -203,7 +200,7 @@ def aggregate_new_loan_leads(df: pd.DataFrame) -> dict:
         if not code:
             continue
         curr_mtd = int(row["loan_lead_count_curr"]) if pd.notna(row["loan_lead_count_curr"]) else 0
-        curr_types = _parse_type_counts_for_row(row.get("loan_type_detail"))
+        curr_types = _parse_type_counts_for_row(row.get("loan_type_detail"), default_count=curr_mtd)
         prev = previous.get(code)
 
         new_count = _delta(curr_mtd, prev, today)

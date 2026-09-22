@@ -286,18 +286,30 @@ def _resolve_columns(header: _HeaderIndex) -> dict:
     for scheme in (*SSS_SCHEMES, ACCOUNT_OPENING_SCHEME):
         col[f"ftd_{scheme.lower()}"] = header.one(f"ftd {scheme}", group=ftd_group, field=scheme)
 
-    # --- Loan lead generation: field text is "Count of loan lead generate <Month>'<YY>",
-    # two occurrences (previous + current month) — current is the last one.
-    col["loan_lead_count_curr"] = header.last(
-        "loan lead count", field_prefix="Count of loan lead generate"
+    # --- Loan lead generation: one group per month ("Loan Lead Generation
+    # <Month>'<YY>", rolls monthly like the MTD/FTD Achievement blocks
+    # above) containing MTD + FTD count/type fields together. Renamed on
+    # the live sheet at some point from the older flat "Count of loan lead
+    # generate <Month>'<YY>" / "Type on loan" field text (no group,  no
+    # MTD/FTD split) to this MTD/FTD-prefixed shape — resolving by group +
+    # field_prefix, same pattern as every other rolling block, survives
+    # the next such rename too as long as the MTD/FTD prefix convention
+    # holds. Only MTD is used here — that's what every aggregator ("this
+    # month's leads so far") has always meant by "current".
+    loan_lead_groups = header.ordered_groups("Loan Lead Generation")
+    if not loan_lead_groups:
+        raise CallingSheetError("Calling Sheet: no 'Loan Lead Generation <Month>' group found.")
+    loan_lead_group = loan_lead_groups[-1]
+    col["loan_lead_count_curr"] = header.one(
+        "loan lead count", group=loan_lead_group, field_prefix="MTD Loan Lead Count"
     )
-    # "Type on loan" sits immediately after the CURRENT month's count column
-    # (the previous month's count is paired with a "Status" column instead,
-    # not a loan-type breakdown) — free text like "Personal Loan-1" or,
-    # when a CSP generated leads across more than one type this month,
-    # "Agri Loan-1, Personal Loan-5" (comma-separated "Type-Count" pairs).
-    # Parsed in report_aggregation_service.aggregate_loan_lead_generation.
-    col["loan_type_detail"] = header.one("loan type", field="Type on loan")
+    # Free text like "Personal Loan-1" or, when a CSP generated leads
+    # across more than one type this month, "Agri Loan-1, Personal
+    # Loan-5" (comma-separated "Type-Count" pairs). Parsed in
+    # report_aggregation_service.aggregate_loan_lead_generation.
+    col["loan_type_detail"] = header.one(
+        "loan type", group=loan_lead_group, field_prefix="MTD Loan Type"
+    )
 
     return col
 

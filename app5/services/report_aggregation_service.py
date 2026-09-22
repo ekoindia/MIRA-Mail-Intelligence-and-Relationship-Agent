@@ -51,8 +51,8 @@ import pandas as pd
 
 from database.org_models import OrgLevel
 from services.loan_lead_approval_service import aggregate_new_loan_leads
-from services.report_aggregation_helpers import LOAN_TYPE_PAIR_RE as _LOAN_TYPE_PAIR_RE
 from services.report_aggregation_helpers import distribution_str as _distribution_str
+from services.report_aggregation_helpers import parse_type_counts
 
 _SLAB_AMOUNT_RE = re.compile(r"₹\s*([\d,]+)")
 
@@ -489,19 +489,18 @@ def aggregate_inactive_csps(df: pd.DataFrame) -> dict:
 
 def _parse_loan_type_counts(df: pd.DataFrame) -> dict[str, int]:
     """
-    Sum lead counts per loan type from the free-text "Type on loan" column.
-    A single cell can list more than one type this CSP generated leads for
-    this month — e.g. "Agri Loan-1, Personal Loan-5" — so each cell is
-    split on comma and every "Type-Count" pair is parsed individually
-    rather than treating the whole cell as one category.
+    Sum lead counts per loan type from the free-text loan-type column
+    (see report_aggregation_helpers.parse_type_counts for the two shapes
+    this parses: comma-separated "Type-Count" pairs, or — the live
+    sheet's current shape as of 2026-09-22 — a single category label with
+    no count, attributed to that row's own loan_lead_count_curr).
     """
     totals: dict[str, int] = {}
-    for cell in df["loan_type_detail"].dropna().astype(str):
-        for name, count in _LOAN_TYPE_PAIR_RE.findall(cell):
-            name = name.strip()
-            if not name:
-                continue
-            totals[name] = totals.get(name, 0) + int(count)
+    for _, row in df.iterrows():
+        cell = row.get("loan_type_detail")
+        row_count = int(row["loan_lead_count_curr"]) if pd.notna(row.get("loan_lead_count_curr")) else 1
+        for name, count in parse_type_counts(cell if isinstance(cell, str) else "", default_count=row_count).items():
+            totals[name] = totals.get(name, 0) + count
     return totals
 
 
