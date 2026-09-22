@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import pandas as pd
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.auth import get_current_user
 from config import settings
@@ -11,7 +11,7 @@ from database.db import get_db
 from database.models import DistributionJob, EmailLog, EmailStatus, EmailTemplate, ReportMaster
 from database.org_models import OrgLevel
 from services.automation_settings_service import get_autosend_enabled
-from services.calling_sheet_service import load_calling_sheet
+from services.calling_sheet_service import CallingSheetError, load_calling_sheet
 from services.combined_digest_service import is_effectively_automated
 from services.report_aggregation_service import (
     MERGED_INTO_OTHER_REPORT,
@@ -182,7 +182,10 @@ def get_dashboard(user: dict = Depends(get_current_user)):
     now = datetime.now()
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    df = load_calling_sheet()
+    try:
+        df = load_calling_sheet()
+    except CallingSheetError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     national = _national_business_metrics(df)
     rbo_leaderboard = _org_leaderboard(df, "rbo", "rbo_email", n=5, context_col="lho")
     lho_leaderboard = _org_leaderboard(df, "lho", "lho_email", n=3)
