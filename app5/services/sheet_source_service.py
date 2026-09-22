@@ -114,9 +114,18 @@ def fetch_sheet_report(
             header, *rows = values[1:]
         else:
             header, *rows = values
-        # Sheets rows can be ragged (trailing empty cells dropped) — pad every
-        # row out to the header width so pandas doesn't misalign columns.
-        rows = [row + [""] * (len(header) - len(row)) for row in rows]
+        # Sheets rows can be ragged (trailing empty cells dropped) — pad
+        # every row out to the header width so pandas doesn't misalign
+        # columns. A row can also come back LONGER than the header (the
+        # Sheets API trims a row's own trailing empty cells independently,
+        # so the header row can end up shorter than a data row that has a
+        # value in that same trailing position — this started happening
+        # once the Calling Sheet's daily per-date columns pushed past a
+        # blank-header cell, and broke Account Opening (Daily) silently
+        # for several days via a "N columns passed, passed data had N+1
+        # columns" pandas error). Truncate as well as pad so every row is
+        # exactly len(header) wide either way.
+        rows = [row[: len(header)] + [""] * (len(header) - len(row)) for row in rows]
         df = pd.DataFrame(rows, columns=header)
 
         unique_name = f"{uuid.uuid4().hex[:8]}_{filename}"
