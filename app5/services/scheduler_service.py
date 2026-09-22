@@ -56,11 +56,18 @@ def get_scheduler() -> BackgroundScheduler:
             id="sbi_kiosk_growth_autosend_poller", replace_existing=True,
         )
 
-        from services.weekly_autosend_service import check_and_run_weekly_autosend
+        from services.weekly_autosend_service import (
+            check_and_run_weekly_autosend,
+            check_and_run_weekly_baseline_capture,
+        )
 
         _scheduler.add_job(
             check_and_run_weekly_autosend, "interval", minutes=1,
             id="weekly_autosend_poller", replace_existing=True,
+        )
+        _scheduler.add_job(
+            check_and_run_weekly_baseline_capture, "interval", minutes=1,
+            id="weekly_baseline_capture_poller", replace_existing=True,
         )
 
         from services.suggestion_service import run_scheduled_suggestion_scan

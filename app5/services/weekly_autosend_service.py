@@ -53,6 +53,7 @@ from services.automation_settings_service import (
 )
 from services.calling_sheet_freshness_service import check_freshness, is_confirmed_fresh_today
 from services.combined_digest_service import automated_reports_for_level, send_combined_digest
+from services.snapshot_service import capture_weekly_baseline_snapshot, get_snapshot
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -168,3 +169,62 @@ def check_and_run_weekly_autosend() -> None:
             return  # fresh, but still waiting for the scheduled send window
 
         run_weekly_send_now(db, today)
+
+
+_KEY_LAST_BASELINE_MONDAY = "weekly_baseline_last_captured_monday"
+
+
+def check_and_run_weekly_baseline_capture() -> None:
+    """
+    Keeps a fresh WeeklyReportSnapshot baseline flowing every Monday even
+    when weekly_autosend is off (or a real send otherwise doesn't happen
+    that day) — see snapshot_service.capture_weekly_baseline_snapshot's
+    docstring for the incident that prompted this (2026-08-31 ->
+    2026-09-22, three Mondays with weekly_autosend off left no baseline
+    at all, so the growth comparison on the next real send got rejected
+    outright by growth_service's 10-day max-gap check). Deliberately
+    independent of get_weekly_autosend_enabled — a fresh baseline is
+    worth keeping regardless of whether real mail goes out that day.
+    """
+    now = datetime.now()
+    today = now.date()
+
+    with get_db() as db:
+        if now.weekday() != 0:
+            return  # not Monday
+
+        if _get_setting(db, _KEY_LAST_BASELINE_MONDAY) == today.isoformat():
+            return  # already handled this Monday
+
+        # Same send-time gate as the real cycle, and deliberately checked
+        # AFTER it: if weekly_autosend is on and already ran today,
+        # run_weekly_send_now's own real snapshot (via save_drafted_report_
+        # snapshot) will already exist below, and real numbers always beat
+        # a synthetic capture.
+        send_h, send_m = _parse_hhmm(settings.autosend_send_time)
+        send_due_at = now.replace(hour=send_h, minute=send_m, second=0, microsecond=0)
+        if now < send_due_at:
+            return
+
+        if get_snapshot(db, today):
+            _set_setting(db, _KEY_LAST_BASELINE_MONDAY, today.isoformat())
+            db.flush()
+            return
+
+        if not is_confirmed_fresh_today(db):
+            # Don't invent a baseline off a stale/unrefreshed sheet — leave
+            # _KEY_LAST_BASELINE_MONDAY unset so a later poll today retries.
+            return
+
+        try:
+            count = capture_weekly_baseline_snapshot(db, today)
+            logger.info(
+                "Weekly baseline: captured synthetic snapshot for %s (%d rows) — no real weekly send today.",
+                today, count,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Weekly baseline capture failed for %s.", today)
+            return  # leave unset so a later poll today retries
+
+        _set_setting(db, _KEY_LAST_BASELINE_MONDAY, today.isoformat())
+        db.flush()
