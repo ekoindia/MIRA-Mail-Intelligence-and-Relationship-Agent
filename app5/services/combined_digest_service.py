@@ -152,6 +152,27 @@ def is_effectively_automated(report_name: str) -> bool:
     return target is not None and is_automated(target)
 
 
+def is_template_routable(report_name: str) -> bool:
+    """True for a report resolve_digest_template_id can actually resolve a
+    template for ON ITS OWN: a real combined-digest unit (is_automated) or
+    a standalone AGGREGATORS-only report — but NEVER a report that's
+    merged into another one's email (e.g. Social Security Scheme, fully
+    covered by Account Opening's aggregator). is_effectively_automated
+    deliberately counts a merged report as "automated" for badge display
+    (it isn't paused, just folded into its anchor's badge) — reusing that
+    same check to decide how many independent template slots a level
+    needs is wrong: it turns a genuinely single-report level (e.g. Daily/
+    RBO — just Account Opening, since SSS merges into it) into a false
+    2-report one with no MULTI_REPORT_DIGEST_TEMPLATE_NAMES entry, so
+    resolve_digest_template_id raises "no combined digest template
+    configured" for a level that never needed one. This is the check
+    anywhere that decides that count; is_effectively_automated stays the
+    one for badge display."""
+    if report_name in MERGED_INTO_OTHER_REPORT:
+        return False
+    return is_automated(report_name) or report_name in AGGREGATORS
+
+
 def automated_reports_for_level(db, frequency: str, level: OrgLevel) -> list[ReportMaster]:
     """The subset of reports_for_level that has a real aggregator — the
     exact, current set of reports that belong in this level's single

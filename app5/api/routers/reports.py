@@ -11,7 +11,7 @@ from services.combined_digest_service import (
     ALL_LEVELS,
     automated_reports_for_level,
     display_report_list,
-    is_effectively_automated,
+    is_template_routable,
     reports_for_level,
     resolve_digest_template_id,
     send_combined_digest,
@@ -149,17 +149,13 @@ def report_mapping(user: dict = Depends(get_current_user)):
                 reports = reports_for_level(db, frequency, level)
                 if not reports:
                     continue
-                # Display-purposes check (is_effectively_automated), not the
-                # strict is_automated used for actual combined-digest send
-                # routing — this only decides what template name to SHOW
-                # here, and resolve_digest_template_id's single-report path
-                # (len(reports) == 1) never touches _UNIT_AGGREGATORS, so
-                # widening this list to include standalone-only reports
-                # (e.g. Loan Lead Approval (Daily), automated via report_
-                # send_service.AGGREGATORS, never combined with anything)
-                # can't cause the _combined_context KeyError that using
-                # is_effectively_automated for the real send path would.
-                automated = [r for r in reports if is_effectively_automated(r.report_name)]
+                # is_template_routable, NOT is_effectively_automated: the
+                # latter deliberately counts a report merged into another's
+                # email (e.g. Social Security Scheme) as "automated" for
+                # badge purposes, which would wrongly turn a genuinely
+                # single-report level into an unresolvable false multi-
+                # report one here — see is_template_routable's docstring.
+                automated = [r for r in reports if is_template_routable(r.report_name)]
                 template_name, template_id = None, None
                 if automated:
                     try:
