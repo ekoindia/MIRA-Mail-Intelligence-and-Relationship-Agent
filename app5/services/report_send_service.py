@@ -15,6 +15,8 @@ from database.report_source_models import ReportSource
 from services.calling_sheet_freshness_service import check_freshness
 from services.distribution_service import ResolvedRecipient, create_distribution_job
 from services.email_service import run_distribution_job
+from services.loan_lead_approval_service import REPORT_NAME as LOAN_LEAD_APPROVAL_REPORT_NAME
+from services.loan_lead_approval_service import drop_zero_new_lead_recipients
 from services.recipient_resolution_service import resolve_recipients_for_levels
 from services.report_aggregation_service import AGGREGATORS, MERGED_INTO_OTHER_REPORT, NOT_YET_AUTOMATED_REPORTS
 from services.report_source_service import fetch_any_report
@@ -108,6 +110,10 @@ def send_report_now(db, rm: ReportMaster, user: dict, force_draft: bool = False)
             # just get an empty table — skip it entirely rather than draft/
             # send a report with nothing in it.
             drop_zero_activity_daily_recipients(db, job)
+        if rm.report_name == LOAN_LEAD_APPROVAL_REPORT_NAME:
+            # "Please approve these new leads" with zero new leads today
+            # makes no sense to send — see drop_zero_new_lead_recipients.
+            drop_zero_new_lead_recipients(db, job)
 
     if job.total_recipients == 0:
         raise ValueError("Every recipient had zero activity across all 4 schemes today — nothing to send.")

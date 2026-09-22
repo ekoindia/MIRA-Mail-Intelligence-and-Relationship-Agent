@@ -382,6 +382,7 @@ interface InactiveResponse {
 }
 
 const INACTIVE_THEME = { line: "#ecdcae", fg: "#8a6410", barBg: "#faf1dd" };
+const NEW_LEADS_THEME = { line: "#cbd0f5", fg: "#3730a3", barBg: "#e8eafd" };
 
 function InactiveDetail({ token }: { token: string }) {
   const theme = INACTIVE_THEME;
@@ -468,6 +469,93 @@ function InactiveDetail({ token }: { token: string }) {
   );
 }
 
+interface NewLeadRow {
+  csp_code: string;
+  csp_name: string;
+  branch_name: string;
+  branch_code: string;
+  new_leads: number;
+  type_breakdown: string;
+}
+
+interface NewLeadResponse {
+  recipient_type: string;
+  recipient_name: string;
+  total_new_leads: number;
+  csp_count: number;
+  rows: NewLeadRow[];
+}
+
+function NewLeadsDetail({ token }: { token: string }) {
+  const theme = NEW_LEADS_THEME;
+  const { data, isLoading, error } = useQuery<NewLeadResponse>({
+    queryKey: ["report-new-leads", token],
+    queryFn: async () => (await api.get(`/api/public/report-detail/${token}/new-leads`)).data,
+    enabled: !!token,
+    retry: false,
+  });
+
+  return (
+    <Shell
+      eyebrow="Eko Bharat Ventures · New Loan Leads"
+      title="New Loan Leads — For Approval"
+      subtitle={data ? `${data.recipient_type}: ${data.recipient_name}` : undefined}
+      isLoading={isLoading} error={error}
+    >
+      {data && (
+        <>
+          <div style={{ padding: "20px 20px 8px", display: "flex", gap: 12 }}>
+            <div style={{ flex: 1, background: "#ffffff", border: `1px solid ${theme.line}`, borderRadius: 10, overflow: "hidden" }}>
+              <div style={{ height: 4, background: theme.fg }} />
+              <div style={{ padding: "10px 12px 2px", fontSize: 10, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", color: theme.fg }}>New Leads</div>
+              <div style={{ padding: "0 12px 12px", fontSize: 26, fontWeight: 800, color: theme.fg, fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>{data.total_new_leads}</div>
+            </div>
+            <div style={{ flex: 1, background: "#ffffff", border: `1px solid ${theme.line}`, borderRadius: 10, overflow: "hidden" }}>
+              <div style={{ height: 4, background: theme.fg }} />
+              <div style={{ padding: "10px 12px 2px", fontSize: 10, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", color: theme.fg }}>CSPs Involved</div>
+              <div style={{ padding: "0 12px 12px", fontSize: 26, fontWeight: 800, color: theme.fg, fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>{data.csp_count}</div>
+            </div>
+          </div>
+
+          <div style={{ padding: "8px 20px 4px", fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: theme.fg }}>
+            Which CSP Generated These
+          </div>
+
+          <div style={{ padding: "0 20px 20px", overflowX: "auto" }}>
+            {data.rows.length === 0 ? (
+              <div style={{ padding: "24px 0", textAlign: "center", color: "#7a6f64", fontSize: 13 }}>No new leads to show.</div>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: "#312b26" }}>
+                <thead>
+                  <tr>
+                    {["CSP Code", "CSP Name", "Branch", "Branch Code", "New Leads", "Type"].map((h) => (
+                      <th key={h} style={{ borderBottom: `2px solid ${theme.fg}`, padding: "8px 10px", background: theme.barBg, textAlign: "left", fontSize: 11, color: theme.fg, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.rows.map((r) => (
+                    <tr key={r.csp_code}>
+                      <td style={{ border: "1px solid #e9e2d9", padding: "6px 10px" }}>{r.csp_code}</td>
+                      <td style={{ border: "1px solid #e9e2d9", padding: "6px 10px" }}>{r.csp_name}</td>
+                      <td style={{ border: "1px solid #e9e2d9", padding: "6px 10px" }}>{r.branch_name}</td>
+                      <td style={{ border: "1px solid #e9e2d9", padding: "6px 10px" }}>{r.branch_code}</td>
+                      <td style={{ border: "1px solid #e9e2d9", padding: "6px 10px", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{r.new_leads}</td>
+                      <td style={{ border: "1px solid #e9e2d9", padding: "6px 10px" }}>{r.type_breakdown}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
+    </Shell>
+  );
+}
+
 // Public, no-login page reached by clicking a metric card in an automated
 // report email — see api/routers/report_detail.py (daily "current
 // breakdown") and report_growth_service.py (weekly "week-over-week"
@@ -485,5 +573,6 @@ export default function ReportDetail() {
   if (mode === "growth") return <GrowthDetail token={token} metric={metric} />;
   if (mode === "income") return <IncomeDetail token={token} />;
   if (mode === "inactive") return <InactiveDetail token={token} />;
+  if (mode === "new_leads") return <NewLeadsDetail token={token} />;
   return <CurrentDetail token={token} metric={metric} />;
 }

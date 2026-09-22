@@ -13,6 +13,7 @@ from services.report_detail_service import ReportDetailError, get_metric_breakdo
 from services.report_growth_service import ReportGrowthError, get_metric_growth
 from services.report_inactive_service import ReportInactiveError, get_inactive_breakdown
 from services.report_income_service import ReportIncomeError, get_income_breakdown
+from services.report_new_lead_service import ReportNewLeadError, get_new_lead_breakdown
 
 router = APIRouter(prefix="/api/public/report-detail", tags=["report-detail"])
 
@@ -46,4 +47,12 @@ def report_inactive(token: str):
     try:
         return get_inactive_breakdown(token)
     except ReportInactiveError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{token}/new-leads")
+def report_new_leads(token: str):
+    try:
+        return get_new_lead_breakdown(token)
+    except ReportNewLeadError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

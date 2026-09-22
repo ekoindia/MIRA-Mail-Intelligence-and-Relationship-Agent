@@ -18,11 +18,14 @@ gaps) — those keep working exactly as before, off the one shared upload.
 from __future__ import annotations
 
 import json
+from datetime import date
 
 from sqlalchemy.orm import Session
 
 from database.models import DistributionJob
 from services.calling_sheet_service import load_calling_sheet
+from services.loan_lead_approval_service import REPORT_NAME as LOAN_LEAD_APPROVAL_REPORT_NAME
+from services.loan_lead_approval_service import save_daily_snapshot
 from services.report_aggregation_service import AGGREGATORS, build_csp_metric_breakdown, filter_for_recipient
 from utils.logger import get_logger
 
@@ -90,6 +93,18 @@ def apply_segmented_overrides(db: Session, job: DistributionJob, report_name: st
         return False
 
     df = load_calling_sheet()
+
+    if report_name == LOAN_LEAD_APPROVAL_REPORT_NAME:
+        # Global capture (every CSP, not just this job's recipients) so
+        # tomorrow's delta is correct even for a branch that gets skipped
+        # today (see drop_zero_new_lead_recipients in report_send_service.py)
+        # — reuses the df already fetched above rather than hitting the
+        # Calling Sheet API a second time. A failure here must never break
+        # today's send, only tomorrow's comparison, hence the try/except.
+        try:
+            save_daily_snapshot(db, df, date.today())
+        except Exception:
+            logger.warning("Loan Lead Approval: failed to save today's snapshot.", exc_info=True)
 
     for log_row in job.email_logs:
         recipient_df = filter_for_recipient(

@@ -50,6 +50,9 @@ import re
 import pandas as pd
 
 from database.org_models import OrgLevel
+from services.loan_lead_approval_service import aggregate_new_loan_leads
+from services.report_aggregation_helpers import LOAN_TYPE_PAIR_RE as _LOAN_TYPE_PAIR_RE
+from services.report_aggregation_helpers import distribution_str as _distribution_str
 
 _SLAB_AMOUNT_RE = re.compile(r"₹\s*([\d,]+)")
 
@@ -165,12 +168,6 @@ def _top_bottom_csps(df: pd.DataFrame, metric_col: str, n: int = 3) -> tuple[str
         extra = len(zero_or_below) - len(names)
         bottom_str = ", ".join(names) + (f", and {extra} more" if extra > 0 else "")
     return top_str, bottom_str
-
-
-def _distribution_str(d: dict) -> str:
-    if not d:
-        return "No data available"
-    return ", ".join(f"{k}: {v}" for k, v in sorted(d.items(), key=lambda kv: -kv[1]))
 
 
 def aggregate_sss(df: pd.DataFrame) -> dict:
@@ -490,9 +487,6 @@ def aggregate_inactive_csps(df: pd.DataFrame) -> dict:
     }
 
 
-_LOAN_TYPE_PAIR_RE = re.compile(r"([A-Za-z][A-Za-z ]*?)-(\d+)")
-
-
 def _parse_loan_type_counts(df: pd.DataFrame) -> dict[str, int]:
     """
     Sum lead counts per loan type from the free-text "Type on loan" column.
@@ -710,6 +704,13 @@ AGGREGATORS = {
     "Loan Lead Generation (Weekly)": aggregate_loan_lead_generation,
     "DFS Incentive Slab (Monthly)": aggregate_dfs_incentive_slab,
     "CSP Income Impact (Monthly)": aggregate_csp_income_impact,
+    # Branch-level "please approve these new leads" report — a day-over-day
+    # delta against a stored snapshot, computed entirely in
+    # loan_lead_approval_service.py rather than here, since every other
+    # aggregator in this module is a pure function of the current sheet
+    # alone and this one inherently needs the DB for its baseline. See
+    # that module's docstring for why "new" can only ever be a delta.
+    "Loan Lead Approval (Daily)": aggregate_new_loan_leads,
 }
 
 # Reports that must NEVER send/draft their own separate email — they're

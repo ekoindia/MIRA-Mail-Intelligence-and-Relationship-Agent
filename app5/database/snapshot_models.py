@@ -37,3 +37,36 @@ class WeeklyReportSnapshot(Base):
     __table_args__ = (
         Index("idx_weekly_snapshot_date_recipient", "report_date", "recipient_email"),
     )
+
+
+class DailyLoanLeadSnapshot(Base):
+    """
+    One row per CSP per day — that CSP's Loan Lead MTD count and per-type
+    breakdown as of that day, captured once daily regardless of which (if
+    any) recipients actually got a drafted/sent email that day. Global,
+    not per-recipient: services/loan_lead_approval_service.py filters this
+    down to one branch's own CSPs when computing "new leads since the last
+    snapshot" for that branch's report.
+
+    Unlike WeeklyReportSnapshot (a frozen copy of what a specific drafted
+    email said), this is captured independently of any send/draft outcome
+    — so a branch with zero new leads today (and therefore no drafted
+    email at all, see drop_zero_new_lead_recipients) still gets today's
+    real counts stored as tomorrow's comparison baseline.
+    """
+    __tablename__ = "daily_loan_lead_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    snapshot_date = Column(Date, nullable=False)
+    csp_code = Column(String(50), nullable=False)
+    csp_name = Column(String(255), nullable=True)
+    branch_name = Column(String(255), nullable=True)
+    branch_code = Column(String(50), nullable=True)
+    mtd_count = Column(Integer, nullable=False, default=0)
+    # {"Agri Loan": 3, "Personal Loan": 5, ...} for this CSP as of this day.
+    type_counts_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_daily_ll_snapshot_date_csp", "snapshot_date", "csp_code", unique=True),
+    )
