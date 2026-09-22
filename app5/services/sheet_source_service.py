@@ -114,18 +114,25 @@ def fetch_sheet_report(
             header, *rows = values[1:]
         else:
             header, *rows = values
-        # Sheets rows can be ragged (trailing empty cells dropped) — pad
-        # every row out to the header width so pandas doesn't misalign
-        # columns. A row can also come back LONGER than the header (the
-        # Sheets API trims a row's own trailing empty cells independently,
-        # so the header row can end up shorter than a data row that has a
-        # value in that same trailing position — this started happening
-        # once the Calling Sheet's daily per-date columns pushed past a
-        # blank-header cell, and broke Account Opening (Daily) silently
-        # for several days via a "N columns passed, passed data had N+1
-        # columns" pandas error). Truncate as well as pad so every row is
-        # exactly len(header) wide either way.
-        rows = [row[: len(header)] + [""] * (len(header) - len(row)) for row in rows]
+        # Sheets rows can be ragged (trailing empty cells dropped), and the
+        # Calling Sheet keeps growing new columns over time (a fresh block
+        # of per-date calling-log columns every day). The Sheets API trims
+        # each row's own trailing empty cells independently, so a data row
+        # can come back LONGER than the header row whenever the header's
+        # own trailing cell for a brand-new column happens to be blank —
+        # this broke Account Opening (Daily) silently for several days via
+        # a "N columns passed, passed data had N+1 columns" pandas error
+        # the moment it happened. Never drop data to fix that: widen the
+        # header (not the rows) out to whatever the widest row actually
+        # is, naming any column whose header cell is blank generically, so
+        # newly-added sheet columns are always accommodated by growing the
+        # column set rather than by truncating real data.
+        width = max(len(header), max((len(r) for r in rows), default=0))
+        header = [
+            h if str(h).strip() else f"_col_{i}"
+            for i, h in enumerate(header + [""] * (width - len(header)))
+        ]
+        rows = [row + [""] * (width - len(row)) for row in rows]
         df = pd.DataFrame(rows, columns=header)
 
         unique_name = f"{uuid.uuid4().hex[:8]}_{filename}"
