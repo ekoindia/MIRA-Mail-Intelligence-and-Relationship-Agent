@@ -224,9 +224,21 @@ def aggregate_new_loan_leads(df: pd.DataFrame) -> dict:
 
     csp_rows.sort(key=lambda r: r["new_leads"], reverse=True)
 
+    # Shown directly in the email body (not just behind the clickable
+    # card) — the CSP code(s) responsible for today's new leads, so the
+    # branch can see at a glance who to follow up with without opening
+    # the detail page. "CSP1 (n), CSP2 (n)" when more than one CSP
+    # contributed, just the bare code when only one did (no "(1)" noise
+    # for the common single-CSP case).
+    if len(csp_rows) == 1:
+        csp_codes_display = csp_rows[0]["csp_code"]
+    else:
+        csp_codes_display = ", ".join(f"{r['csp_code']} ({r['new_leads']})" for r in csp_rows)
+
     return {
         "New_Leads_Count": total_new,
         "New_Lead_Type": _distribution_str(type_totals) if type_totals else "No data available",
+        "New_Lead_CSP_Codes": csp_codes_display if csp_rows else "No data available",
         "CSPs_With_New_Leads": len(csp_rows),
         "Total_CSP_Count": len(df),
         "Has_New_Leads": total_new > 0,
