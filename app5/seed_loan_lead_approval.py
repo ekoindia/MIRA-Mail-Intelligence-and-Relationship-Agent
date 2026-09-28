@@ -118,8 +118,12 @@ def main() -> None:
             print(f"Created ReportMaster id={rm.id}")
         else:
             rm.default_template_id = template.id
-            rm.delivery_mode = "draft"
-            print(f"Found existing ReportMaster id={rm.id} (left as-is aside from template link + draft mode)")
+            # delivery_mode is deliberately NOT touched here once the row
+            # exists — it started as "draft" for the testing phase, but
+            # was switched to "send" after go-live (2026-09-28). Re-running
+            # this script for an unrelated template tweak must never
+            # silently revert that real, deliberate decision back to draft.
+            print(f"Found existing ReportMaster id={rm.id} (left as-is aside from template link — delivery_mode untouched: {rm.delivery_mode!r})")
 
         source = db.query(ReportSource).filter(ReportSource.report_master_id == rm.id).first()
         if source is None:
