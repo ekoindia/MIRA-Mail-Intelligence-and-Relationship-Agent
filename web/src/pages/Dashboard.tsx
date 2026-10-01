@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  RefreshCw, TrendingUp, Users, UserX, Handshake, Clock, Send, PenLine, AlertTriangle, Mail, ArrowUpRight, Inbox,
+  RefreshCw, TrendingUp, Users, UserX, Handshake, Clock, Send, PenLine, AlertTriangle, MousePointerClick, ArrowUpRight, Inbox,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { PageHeader, Card, CardHeader, Badge, LoadingBlock, EmptyState, Table, Th, Td, Toggle } from "../components/ui";
@@ -32,6 +32,7 @@ interface RecentJob { id: number; report: string; status: string; recipients: nu
 interface Operations {
   emailsSent: number; drafted: number; failed: number;
   openToday: { opened: number; total: number };
+  detailOpenedToday: { clicked: number; total: number };
   recentJobs: RecentJob[];
 }
 interface DashboardData {
@@ -251,8 +252,15 @@ export default function Dashboard() {
   }
 
   const { business, rboLeaderboard, lhoLeaderboard, automationStatus, operations } = data;
-  const openPct = operations.openToday.total > 0
-    ? Math.round((operations.openToday.opened / operations.openToday.total) * 100) : 0;
+  // Detail-card clicks, not the pixel-open rate, are the headline number
+  // here — the pixel fires whenever a mail client (or, in practice on
+  // SBI's own mail infra, a security scanner prefetching images before
+  // delivery) merely renders the email, which has been observed inflating
+  // "opened" to ~97% in a single minute across unrelated recipients. A
+  // detail-card click needs a real person to open the mail AND tap
+  // through, so it's the trustworthy engagement signal.
+  const detailClickPct = operations.detailOpenedToday.total > 0
+    ? Math.round((operations.detailOpenedToday.clicked / operations.detailOpenedToday.total) * 100) : 0;
 
   return (
     <div>
@@ -413,12 +421,12 @@ export default function Dashboard() {
               onClick={() => setShowOpenedDetail((v) => !v)}
               className={`-m-1 rounded-lg p-1 text-left transition-colors ${showOpenedDetail ? "bg-brand-50 ring-1 ring-brand-200" : "hover:bg-ink-50"}`}
             >
-              <div className="flex items-center gap-1.5 text-xs text-ink-500"><Mail className="h-3.5 w-3.5" strokeWidth={2} />Opened Today</div>
-              <div className="mt-1 text-xl font-semibold text-ink-900">{openPct}%</div>
+              <div className="flex items-center gap-1.5 text-xs text-ink-500"><MousePointerClick className="h-3.5 w-3.5" strokeWidth={2} />Detail Card Opened</div>
+              <div className="mt-1 text-xl font-semibold text-ink-900">{detailClickPct}%</div>
               <div className="mt-0.5 text-xs text-ink-400">
-                {operations.openToday.total === 0
+                {operations.detailOpenedToday.total === 0
                   ? "no recent sends"
-                  : `${operations.openToday.opened} of ${operations.openToday.total} recent · click for detail`}
+                  : `${operations.detailOpenedToday.clicked} of ${operations.detailOpenedToday.total} recent · click for detail`}
               </div>
             </button>
           </div>

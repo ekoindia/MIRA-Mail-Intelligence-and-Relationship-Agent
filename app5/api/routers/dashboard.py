@@ -176,6 +176,24 @@ def _open_stats(db, since: datetime) -> dict:
     return {"opened": opened, "total": total}
 
 
+def _detail_open_stats(db, since: datetime) -> dict:
+    """Same windowing as _open_stats, but counting detail_opened_at (a real
+    click-through to a CSP-wise card) instead of opened_at (the pixel).
+    This is the dashboard's headline engagement number — the pixel fires
+    whenever a mail client (or, in practice on SBI's own mail infra, a
+    security scanner prefetching images before delivery) merely renders the
+    email, so a high pixel-open rate alone doesn't mean anyone actually read
+    the report; a detail-card click requires a real person to open the mail
+    AND tap through."""
+    sent_since = since - timedelta(days=_OPEN_LOOKBACK_DAYS)
+    in_play = db.query(EmailLog).filter(
+        EmailLog.status == EmailStatus.SENT, EmailLog.sent_at >= sent_since,
+    )
+    total = in_play.count()
+    clicked = in_play.filter(EmailLog.detail_opened_at >= since).count()
+    return {"clicked": clicked, "total": total}
+
+
 @router.get("")
 def get_dashboard(user: dict = Depends(get_current_user)):
     since = _since_yesterday()
@@ -220,6 +238,7 @@ def get_dashboard(user: dict = Depends(get_current_user)):
 
         automation_status = _get_automation_status(db)
         open_today = _open_stats(db, day_start)
+        detail_open_today = _detail_open_stats(db, day_start)
 
     return {
         "lastSynced": utc_iso(now),
@@ -232,6 +251,7 @@ def get_dashboard(user: dict = Depends(get_current_user)):
             "drafted": drafted,
             "failed": failed,
             "openToday": open_today,
+            "detailOpenedToday": detail_open_today,
             "recentJobs": recent_jobs,
         },
     }

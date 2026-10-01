@@ -87,20 +87,21 @@ export default function OpenedDetailDashboard({ onClose }: { onClose: () => void
               </div>
               <div className="mt-1 font-mono text-lg font-semibold text-ink-900">{data.total.toLocaleString()}</div>
             </div>
-            <div className="rounded-lg border border-ink-200 bg-white px-3 py-2.5">
-              <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-500">
-                <MailOpen className="h-3 w-3" strokeWidth={2.25} />Opened
+            <div className="rounded-lg border border-brand-300 bg-brand-50 px-3 py-2.5 ring-1 ring-brand-200">
+              <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-brand-700">
+                <MousePointerClick className="h-3 w-3" strokeWidth={2.25} />Detail Card Clicked
               </div>
-              <div className="mt-1 font-mono text-lg font-semibold text-ink-900">
-                {data.opened.toLocaleString()} <span className="text-xs font-normal text-ink-400">({openRate}%)</span>
+              <div className="mt-1 font-mono text-lg font-semibold text-brand-900">
+                {data.detailOpened.toLocaleString()} <span className="text-xs font-normal text-brand-600">({detailRate}%)</span>
               </div>
+              <div className="mt-0.5 text-[10px] text-brand-600">the reliable signal — a real click, not just a loaded pixel</div>
             </div>
             <div className="rounded-lg border border-ink-200 bg-white px-3 py-2.5">
               <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-500">
-                <MousePointerClick className="h-3 w-3" strokeWidth={2.25} />Detail Card Clicked
+                <MailOpen className="h-3 w-3" strokeWidth={2.25} />Opened (pixel)
               </div>
               <div className="mt-1 font-mono text-lg font-semibold text-ink-900">
-                {data.detailOpened.toLocaleString()} <span className="text-xs font-normal text-ink-400">({detailRate}%)</span>
+                {data.opened.toLocaleString()} <span className="text-xs font-normal text-ink-400">({openRate}%)</span>
               </div>
             </div>
           </div>
@@ -109,7 +110,7 @@ export default function OpenedDetailDashboard({ onClose }: { onClose: () => void
             <Table>
               <thead>
                 <tr>
-                  <Th>Recipient</Th><Th>Level</Th><Th>Report</Th><Th>Sent</Th><Th>Opened</Th><Th>Detail Card</Th>
+                  <Th>Recipient</Th><Th>Level</Th><Th>Report</Th><Th>Sent</Th><Th>Detail Card</Th><Th>Opened (pixel)</Th>
                 </tr>
               </thead>
               <tbody>
@@ -123,15 +124,15 @@ export default function OpenedDetailDashboard({ onClose }: { onClose: () => void
                     <Td className="text-ink-600">{r.report}</Td>
                     <Td className="text-ink-500">{fmtDate(r.sentAt)}</Td>
                     <Td>
-                      {r.opened ? (
-                        <Badge tone="blue">{fmtDate(r.openedAt)}</Badge>
+                      {r.detailOpened ? (
+                        <Badge tone="green">{fmtDate(r.detailOpenedAt)}</Badge>
                       ) : (
-                        <span className="text-ink-300">Not opened</span>
+                        <span className="text-ink-300">Not clicked</span>
                       )}
                     </Td>
                     <Td>
-                      {r.detailOpened ? (
-                        <Badge tone="green">{fmtDate(r.detailOpenedAt)}</Badge>
+                      {r.opened ? (
+                        <Badge tone="blue">{fmtDate(r.openedAt)}</Badge>
                       ) : (
                         <span className="text-ink-300">—</span>
                       )}
