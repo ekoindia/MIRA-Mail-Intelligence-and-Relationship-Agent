@@ -570,6 +570,24 @@ export default function ReportDetail() {
   const metric = params.get("metric") ?? "";
   const mode = params.get("mode") ?? "current";
 
+  // Every mode below gates its data fetch on `enabled: !!token`, so an
+  // empty token (link opened without its query string, truncated by a
+  // mail client or copy-paste) would otherwise leave the query permanently
+  // un-fired — isLoading stays true forever with no error to show, i.e. a
+  // spinner stuck on "Loading..." with nothing actually wrong to report.
+  // Catching it here, before dispatching to any mode, turns that into the
+  // same "link no longer valid" message a real expired/unknown token gets.
+  if (!token) {
+    return (
+      <Shell eyebrow="Eko Bharat Ventures" title="Invalid Link" isLoading={false} error={undefined}>
+        <div style={{ padding: "24px 20px", textAlign: "center", color: "#7a6f64", fontSize: 13 }}>
+          This link is missing its token — it may have been copied or opened incompletely.
+          Please open it directly from the original email.
+        </div>
+      </Shell>
+    );
+  }
+
   if (mode === "growth") return <GrowthDetail token={token} metric={metric} />;
   if (mode === "income") return <IncomeDetail token={token} />;
   if (mode === "inactive") return <InactiveDetail token={token} />;
