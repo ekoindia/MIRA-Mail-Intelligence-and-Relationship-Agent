@@ -10,6 +10,7 @@ clicks days later and the underlying sheet has since moved on.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 from database.models import EmailLog
 
@@ -24,6 +25,28 @@ _METRIC_LABELS = {
 
 class ReportDetailError(Exception):
     pass
+
+
+def mark_detail_opened(token: str) -> None:
+    """
+    Record that a recipient clicked through from a mail card to one of the
+    report-detail pages — real content engagement, distinct from
+    api/routers/tracking.py's pixel-based opened_at/open_count (which only
+    proves the mail client rendered the email, not that anyone read it).
+    Called from every route in api/routers/report_detail.py, after that
+    route's own lookup has already confirmed the token is valid — an
+    invalid/expired token's 404 must not count as "opened". First-click
+    timestamp only; open_count increments on every visit, mirroring
+    tracking.py's own convention for the pixel counter.
+    """
+    from database.db import get_db
+
+    with get_db() as db:
+        row = db.query(EmailLog).filter(EmailLog.tracking_token == token).first()
+        if row is not None:
+            if row.detail_opened_at is None:
+                row.detail_opened_at = datetime.utcnow()
+            row.detail_open_count = (row.detail_open_count or 0) + 1
 
 
 def get_metric_breakdown(token: str, metric: str) -> dict:

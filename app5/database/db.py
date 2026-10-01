@@ -160,6 +160,8 @@ def _run_lightweight_migrations() -> None:
         ("incoming_emails", "triage_tier", "VARCHAR(10)"),
         ("incoming_emails", "triage_intent", "VARCHAR(60)"),
         ("email_logs", "csp_breakdown_json", "TEXT"),
+        ("email_logs", "detail_opened_at", "DATETIME"),
+        ("email_logs", "detail_open_count", "INTEGER"),
     ]
 
     with engine.begin() as conn:

@@ -7,6 +7,7 @@ import { api } from "../lib/api";
 import { PageHeader, Card, CardHeader, Badge, LoadingBlock, EmptyState, Table, Th, Td, Toggle } from "../components/ui";
 import IncomingSection, { useIncomingLive } from "./Incoming";
 import OutgoingLevelDashboard from "../components/OutgoingLevelDashboard";
+import OpenedDetailDashboard from "../components/OpenedDetailDashboard";
 
 const REFRESH_MS = 45_000;
 
@@ -211,6 +212,7 @@ function ViewToggle({
 export default function Dashboard() {
   const queryClient = useQueryClient();
   const [view, setView] = useState<"outgoing" | "incoming">("outgoing");
+  const [showOpenedDetail, setShowOpenedDetail] = useState(false);
   const { data, isLoading, isFetching, error } = useQuery<DashboardData>({
     queryKey: ["dashboard"],
     queryFn: async () => (await api.get("/api/dashboard")).data,
@@ -407,18 +409,23 @@ export default function Dashboard() {
               <div className="flex items-center gap-1.5 text-xs text-ink-500"><AlertTriangle className="h-3.5 w-3.5" strokeWidth={2} />Failed</div>
               <div className="mt-1 text-xl font-semibold text-ink-900">{operations.failed}</div>
             </div>
-            <div>
+            <button
+              onClick={() => setShowOpenedDetail((v) => !v)}
+              className={`-m-1 rounded-lg p-1 text-left transition-colors ${showOpenedDetail ? "bg-brand-50 ring-1 ring-brand-200" : "hover:bg-ink-50"}`}
+            >
               <div className="flex items-center gap-1.5 text-xs text-ink-500"><Mail className="h-3.5 w-3.5" strokeWidth={2} />Opened Today</div>
               <div className="mt-1 text-xl font-semibold text-ink-900">{openPct}%</div>
               <div className="mt-0.5 text-xs text-ink-400">
                 {operations.openToday.total === 0
                   ? "no recent sends"
-                  : `${operations.openToday.opened} of ${operations.openToday.total} recent`}
+                  : `${operations.openToday.opened} of ${operations.openToday.total} recent · click for detail`}
               </div>
-            </div>
+            </button>
           </div>
         </Card>
       </div>
+
+      {showOpenedDetail && <OpenedDetailDashboard onClose={() => setShowOpenedDetail(false)} />}
 
       <div className="mt-6">
         <Card>

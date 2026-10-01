@@ -222,6 +222,15 @@ class EmailLog(Base):
     opened_at = Column(DateTime, nullable=True)
     open_count = Column(Integer, default=0)
 
+    # Card-click tracking: distinct from the pixel-based opened_at/open_count
+    # above — this is set when the recipient actually clicks through to a
+    # CSP-wise detail page (api/routers/report_detail.py), i.e. real
+    # engagement with the report content, not just the mail client loading
+    # the open-tracking pixel. See services/report_detail_service.
+    # mark_detail_opened. NULL until the first such click.
+    detail_opened_at = Column(DateTime, nullable=True)
+    detail_open_count = Column(Integer, default=0)
+
     # Per-scheme (PMJDY/APY/PMSBY/PMJJBY) target/MTD/FTD + per-CSP rows,
     # snapshotted at send time (see report_aggregation_service.
     # build_csp_metric_breakdown) — the "click a metric card" detail page

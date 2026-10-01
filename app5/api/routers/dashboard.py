@@ -242,6 +242,16 @@ def _window_start(window: str) -> datetime | None:
     return None if days is None else datetime.now() - timedelta(days=days)
 
 
+def _open_window_start(window: str) -> datetime | None:
+    """Same idea as _window_start, but with a "today" option (start of the
+    calendar day) instead of 90d — the Opened Today stat's own drill-down
+    windows are Today / 7 days / 30 days / All time, not 7/30/90/all."""
+    if window == "today":
+        return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    days = {"7d": 7, "30d": 30, "all": None}.get(window, 0)
+    return None if days is None else datetime.now() - timedelta(days=days)
+
+
 @router.get("/outgoing-by-level")
 def get_outgoing_by_level(
     window: str = Query("30d", pattern="^(7d|30d|90d|all)$"),
@@ -374,3 +384,65 @@ def get_outgoing_detail(
             })
 
     return {"total": total, "page": page, "pageSize": pageSize, "rows": out}
+
+
+@router.get("/opened-detail")
+def get_opened_detail(
+    window: str = Query("today", pattern="^(today|7d|30d|all)$"),
+    page: int = Query(1, ge=1),
+    pageSize: int = Query(25, ge=1, le=100),
+    user: dict = Depends(get_current_user),
+):
+    """
+    Paginated per-recipient rows for the "Opened Today" stat's drill-down —
+    who opened their email (and when, via the tracking pixel) across four
+    fixed windows, PLUS whether they clicked through to a CSP-wise detail
+    card (real content engagement — see services/report_detail_service.
+    mark_detail_opened — distinct from just the mail client loading the
+    pixel). Window is independent of the dashboard's own 2-day "today" open
+    lookback (_OPEN_LOOKBACK_DAYS): this endpoint filters by when the mail
+    was actually SENT, not when it might still plausibly be read.
+    """
+    start = _open_window_start(window)
+    with get_db() as db:
+        q = (
+            db.query(EmailLog, EmailTemplate.name)
+            .join(DistributionJob, EmailLog.job_id == DistributionJob.id)
+            .outerjoin(EmailTemplate, DistributionJob.template_id == EmailTemplate.id)
+            .filter(EmailLog.status == EmailStatus.SENT)
+        )
+        if start is not None:
+            q = q.filter(EmailLog.sent_at >= start)
+
+        total = q.count()
+        opened_total = q.filter(EmailLog.opened_at.isnot(None)).count()
+        detail_total = q.filter(EmailLog.detail_opened_at.isnot(None)).count()
+
+        rows = (
+            q.order_by(EmailLog.sent_at.desc())
+            .offset((page - 1) * pageSize)
+            .limit(pageSize)
+            .all()
+        )
+
+        out = []
+        for log, template_name in rows:
+            out.append({
+                "id": log.id,
+                "recipientName": log.recipient_name,
+                "recipientEmail": log.recipient_email,
+                "level": log.recipient_type,
+                "report": template_name or "Other",
+                "sentAt": utc_iso(log.sent_at) if log.sent_at else None,
+                "opened": log.opened_at is not None,
+                "openedAt": utc_iso(log.opened_at) if log.opened_at else None,
+                "openCount": log.open_count or 0,
+                "detailOpened": log.detail_opened_at is not None,
+                "detailOpenedAt": utc_iso(log.detail_opened_at) if log.detail_opened_at else None,
+                "detailOpenCount": log.detail_open_count or 0,
+            })
+
+    return {
+        "window": window, "total": total, "opened": opened_total, "detailOpened": detail_total,
+        "page": page, "pageSize": pageSize, "rows": out,
+    }

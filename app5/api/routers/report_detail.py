@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from services.report_detail_service import ReportDetailError, get_metric_breakdown
+from services.report_detail_service import ReportDetailError, get_metric_breakdown, mark_detail_opened
 from services.report_growth_service import ReportGrowthError, get_metric_growth
 from services.report_inactive_service import ReportInactiveError, get_inactive_breakdown
 from services.report_income_service import ReportIncomeError, get_income_breakdown
@@ -21,38 +21,48 @@ router = APIRouter(prefix="/api/public/report-detail", tags=["report-detail"])
 @router.get("/{token}")
 def report_detail(token: str, metric: str):
     try:
-        return get_metric_breakdown(token, metric)
+        result = get_metric_breakdown(token, metric)
     except ReportDetailError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    mark_detail_opened(token)
+    return result
 
 
 @router.get("/{token}/growth")
 def report_growth(token: str, metric: str):
     try:
-        return get_metric_growth(token, metric)
+        result = get_metric_growth(token, metric)
     except ReportGrowthError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    mark_detail_opened(token)
+    return result
 
 
 @router.get("/{token}/income")
 def report_income(token: str):
     try:
-        return get_income_breakdown(token)
+        result = get_income_breakdown(token)
     except ReportIncomeError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    mark_detail_opened(token)
+    return result
 
 
 @router.get("/{token}/inactive")
 def report_inactive(token: str):
     try:
-        return get_inactive_breakdown(token)
+        result = get_inactive_breakdown(token)
     except ReportInactiveError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    mark_detail_opened(token)
+    return result
 
 
 @router.get("/{token}/new-leads")
 def report_new_leads(token: str):
     try:
-        return get_new_lead_breakdown(token)
+        result = get_new_lead_breakdown(token)
     except ReportNewLeadError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    mark_detail_opened(token)
+    return result
