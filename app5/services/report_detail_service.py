@@ -40,10 +40,15 @@ def mark_detail_opened(token: str) -> None:
     tracking.py's own convention for the pixel counter.
     """
     from database.db import get_db
+    from database.org_models import OrgLevel
+
+    # Only the officials a report is addressed to count as engagement;
+    # internal-team digests (e.g. the SBI Kiosk report) never do.
+    counted_levels = {OrgLevel.BRANCH.value, OrgLevel.RBO.value, OrgLevel.LHO.value, OrgLevel.CORP.value}
 
     with get_db() as db:
         row = db.query(EmailLog).filter(EmailLog.tracking_token == token).first()
-        if row is not None:
+        if row is not None and row.recipient_type in counted_levels:
             if row.detail_opened_at is None:
                 row.detail_opened_at = datetime.utcnow()
             row.detail_open_count = (row.detail_open_count or 0) + 1
