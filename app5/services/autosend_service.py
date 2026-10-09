@@ -42,6 +42,7 @@ often to retry, and when to fire the actual send once fresh.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 
 from config import settings
@@ -78,6 +79,11 @@ _SBI_KIOSK_REPORT_PREFIX = "SBI Kiosk"
 
 _KEY_LAST_CHECK_AT = "autosend_last_check_at"
 _KEY_LAST_SENT_DATE = "autosend_last_sent_date"
+# A day is only marked sent once every report went out; a failed report is
+# retried after autosend_recheck_minutes, and reports already done today are
+# remembered so a retry never re-sends them.
+_KEY_DONE_REPORTS = "autosend_done_reports"
+_KEY_RETRY_AFTER = "autosend_retry_after"
 
 
 def _get_setting(db, key: str) -> str | None:
@@ -96,6 +102,26 @@ def _set_setting(db, key: str, value: str) -> None:
 def _parse_hhmm(value: str) -> tuple[int, int]:
     hh, mm = value.split(":")
     return int(hh), int(mm)
+
+
+def _retry_pending(db, key: str, now: datetime) -> bool:
+    raw = _get_setting(db, key)
+    if not raw:
+        return False
+    retry_after = datetime.fromisoformat(raw)
+    return retry_after.date() == now.date() and now < retry_after
+
+
+def _schedule_retry(db, key: str, now: datetime) -> None:
+    _set_setting(db, key, (now + timedelta(minutes=settings.autosend_recheck_minutes)).isoformat())
+
+
+def _done_reports_today(db, today_str: str) -> set[str]:
+    raw = _get_setting(db, _KEY_DONE_REPORTS)
+    if not raw:
+        return set()
+    data = json.loads(raw)
+    return set(data.get("names", [])) if data.get("date") == today_str else set()
 
 
 def check_and_run_daily_autosend() -> None:
@@ -130,6 +156,9 @@ def check_and_run_daily_autosend() -> None:
 
         if now < fetch_due_at:
             return  # not yet fetch time
+
+        if _retry_pending(db, _KEY_RETRY_AFTER, now):
+            return  # an earlier run today failed; wait for its retry slot
 
         fresh_confirmed_today = is_confirmed_fresh_today(db)
 
@@ -172,8 +201,11 @@ def check_and_run_daily_autosend() -> None:
             .order_by(ReportMaster.report_name)
             .all()
         )
+        done = _done_reports_today(db, today_str)
         sent, skipped, failed = 0, 0, 0
         for rm in reports:
+            if rm.report_name in done:
+                continue
             try:
                 # force_draft=False: this cycle now sends for real whenever
                 # a report's own delivery_mode says "send" — draft-only is
@@ -183,17 +215,24 @@ def check_and_run_daily_autosend() -> None:
                 # for an unattended run.
                 send_report_now(db, rm, _SYSTEM_USER, force_draft=False)
                 sent += 1
+                done.add(rm.report_name)
             except ValueError as exc:
                 skipped += 1
+                done.add(rm.report_name)
                 logger.info("Autosend: skipped '%s' — %s", rm.report_name, exc)
             except Exception as exc:  # noqa: BLE001
                 failed += 1
                 logger.exception("Autosend: send failed for '%s': %s", rm.report_name, exc)
 
-        _set_setting(db, _KEY_LAST_SENT_DATE, today_str)
+        _set_setting(db, _KEY_DONE_REPORTS, json.dumps({"date": today_str, "names": sorted(done)}))
+        if failed:
+            _schedule_retry(db, _KEY_RETRY_AFTER, now)
+        else:
+            _set_setting(db, _KEY_LAST_SENT_DATE, today_str)
         db.flush()
         logger.info(
-            "Autosend: daily run complete for %s — sent=%s skipped=%s failed=%s",
+            "Autosend: daily run %s for %s — sent=%s skipped=%s failed=%s",
+            f"will retry in {settings.autosend_recheck_minutes} min" if failed else "complete",
             today_str, sent, skipped, failed,
         )
 
@@ -216,6 +255,7 @@ def check_and_run_daily_autosend() -> None:
 
 _SBI_KEY_LAST_CHECK_AT = "sbikiosk_autosend_last_check_at"
 _SBI_KEY_LAST_SENT_DATE = "sbikiosk_autosend_last_sent_date"
+_SBI_KEY_RETRY_AFTER = "sbikiosk_autosend_retry_after"
 
 
 def check_and_run_sbi_kiosk_growth_autosend() -> None:
@@ -239,6 +279,9 @@ def check_and_run_sbi_kiosk_growth_autosend() -> None:
 
         if now < fetch_due_at:
             return  # not yet fetch time
+
+        if _retry_pending(db, _SBI_KEY_RETRY_AFTER, now):
+            return  # an earlier run today failed; wait for its retry slot
 
         # BOTH sources must be confirmed fresh today — Calling Sheet (shared
         # gate, same one every other Daily report uses) for the Calling/
@@ -300,7 +343,12 @@ def check_and_run_sbi_kiosk_growth_autosend() -> None:
         except ValueError as exc:
             logger.info("SBI Kiosk autosend: skipped — %s", exc)
         except Exception:  # noqa: BLE001
-            logger.exception("SBI Kiosk autosend: send failed.")
+            logger.exception(
+                "SBI Kiosk autosend: send failed; will retry in %s min.", settings.autosend_recheck_minutes,
+            )
+            _schedule_retry(db, _SBI_KEY_RETRY_AFTER, now)
+            db.flush()
+            return
 
         _set_setting(db, _SBI_KEY_LAST_SENT_DATE, today_str)
         db.flush()
