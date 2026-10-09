@@ -56,6 +56,19 @@ def get_current_user(creds: HTTPAuthorizationCredentials | None = Depends(_secur
     return {"id": int(payload["sub"]), "username": payload["username"], "role": payload["role"]}
 
 
+def is_internal_viewer(creds: HTTPAuthorizationCredentials | None = Depends(_security)) -> bool:
+    """True when the request carries a MIRA-signed login token, i.e. an Eko
+    staff member viewing a public report-detail card. Expiry is ignored on
+    purpose: an old token in the browser still proves who is looking."""
+    if creds is None:
+        return False
+    try:
+        jwt.decode(creds.credentials, settings.secret_key, algorithms=[ALGORITHM], options={"verify_exp": False})
+    except jwt.PyJWTError:
+        return False
+    return True
+
+
 def require_admin(user: dict = Depends(get_current_user)) -> dict:
     if user["role"] != "Admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
