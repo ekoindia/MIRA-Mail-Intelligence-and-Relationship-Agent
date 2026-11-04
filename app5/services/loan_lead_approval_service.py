@@ -27,6 +27,9 @@ import pandas as pd
 
 from services.report_aggregation_helpers import distribution_str as _distribution_str
 from services.report_aggregation_helpers import parse_type_counts
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # report_name key this whole module is wired under — see AGGREGATORS in
 # report_aggregation_service.py, the snapshot hook in
@@ -72,34 +75,50 @@ def save_daily_snapshot(db, df: pd.DataFrame, snapshot_date: date) -> int:
     """
     from database.snapshot_models import DailyLoanLeadSnapshot
 
-    saved = 0
+    # The session runs with autoflush=False, so a row added earlier in this
+    # loop is invisible to the query below; a CSP listed twice in the sheet
+    # used to insert two rows and fail the (date, csp_code) unique index,
+    # rolling back the whole send transaction (2026-11-04 incident).
+    seen: dict[str, DailyLoanLeadSnapshot] = {}
+    duplicates: set[str] = set()
     for _, row in df.iterrows():
-        code = str(row["csp_code"]) if pd.notna(row["csp_code"]) else ""
+        code = str(row["csp_code"]).strip() if pd.notna(row["csp_code"]) else ""
         if not code:
             continue
         mtd_count = int(row["loan_lead_count_curr"]) if pd.notna(row["loan_lead_count_curr"]) else 0
         type_counts = _parse_type_counts_for_row(row.get("loan_type_detail"), default_count=mtd_count)
 
-        existing = (
-            db.query(DailyLoanLeadSnapshot)
-            .filter(
-                DailyLoanLeadSnapshot.snapshot_date == snapshot_date,
-                DailyLoanLeadSnapshot.csp_code == code,
+        existing = seen.get(code)
+        if existing is not None:
+            duplicates.add(code)
+            if mtd_count <= (existing.mtd_count or 0):
+                continue  # keep the row with the higher count
+        else:
+            existing = (
+                db.query(DailyLoanLeadSnapshot)
+                .filter(
+                    DailyLoanLeadSnapshot.snapshot_date == snapshot_date,
+                    DailyLoanLeadSnapshot.csp_code == code,
+                )
+                .first()
             )
-            .first()
-        )
-        if existing is None:
-            existing = DailyLoanLeadSnapshot(snapshot_date=snapshot_date, csp_code=code)
-            db.add(existing)
+            if existing is None:
+                existing = DailyLoanLeadSnapshot(snapshot_date=snapshot_date, csp_code=code)
+                db.add(existing)
+            seen[code] = existing
         existing.csp_name = str(row["csp_name"]) if pd.notna(row["csp_name"]) else ""
         existing.branch_name = str(row["branch_name"]) if pd.notna(row["branch_name"]) else ""
         existing.branch_code = str(row["branch_code"]) if pd.notna(row["branch_code"]) else ""
         existing.mtd_count = mtd_count
         existing.type_counts_json = _json_dumps(type_counts)
-        saved += 1
 
+    if duplicates:
+        logger.warning(
+            "Loan-lead snapshot %s: CSP code(s) listed more than once in the Calling Sheet, "
+            "kept the higher count: %s", snapshot_date, ", ".join(sorted(duplicates)),
+        )
     db.flush()
-    return saved
+    return len(seen)
 
 
 def _json_dumps(obj) -> str:

@@ -205,21 +205,22 @@ def check_and_run_daily_autosend() -> None:
         done = _done_reports_today(db, today_str)
         started = send_guard.autosend_reports_started_today()
         sent, skipped, failed = 0, 0, 0
-        for rm in reports:
-            if rm.report_name in done:
+        report_names = [rm.report_name for rm in reports]
+        for rm, name in zip(reports, report_names):
+            if name in done:
                 continue
-            if rm.report_name in started:
+            if name in started:
                 # Mail already went out today but that run's DB rows were
                 # lost (rolled back). Never re-send automatically.
                 skipped += 1
-                done.add(rm.report_name)
+                done.add(name)
                 logger.error(
                     "Autosend: '%s' already sent mail earlier today but that run did not finish "
                     "saving — NOT sending it again. Check Gmail Sent before any manual resend.",
-                    rm.report_name,
+                    name,
                 )
                 continue
-            token = send_guard.autosend_report.set(rm.report_name)
+            token = send_guard.autosend_report.set(name)
             try:
                 # force_draft=False: this cycle now sends for real whenever
                 # a report's own delivery_mode says "send" — draft-only is
@@ -228,15 +229,25 @@ def check_and_run_daily_autosend() -> None:
                 # Reports page is the only thing that decides draft vs send
                 # for an unattended run.
                 send_report_now(db, rm, _SYSTEM_USER, force_draft=False)
+                # Commit each report on its own so a later report's DB
+                # failure can't roll back this one's job and EmailLog rows.
+                db.commit()
                 sent += 1
-                done.add(rm.report_name)
+                done.add(name)
             except ValueError as exc:
+                # Keep what the skip path wrote (e.g. today's loan-lead
+                # snapshot, tomorrow's baseline) — same as before.
+                db.commit()
                 skipped += 1
-                done.add(rm.report_name)
-                logger.info("Autosend: skipped '%s' — %s", rm.report_name, exc)
+                done.add(name)
+                logger.info("Autosend: skipped '%s' — %s", name, exc)
             except Exception as exc:  # noqa: BLE001
+                # Clear the failed transaction so the loop and the state
+                # writes below can still run; `name` is a plain string so
+                # logging can't re-trigger a load on the broken session.
+                db.rollback()
                 failed += 1
-                logger.exception("Autosend: send failed for '%s': %s", rm.report_name, exc)
+                logger.exception("Autosend: send failed for '%s': %s", name, exc)
             finally:
                 send_guard.autosend_report.reset(token)
 
@@ -370,6 +381,7 @@ def check_and_run_sbi_kiosk_growth_autosend() -> None:
         except ValueError as exc:
             logger.info("SBI Kiosk autosend: skipped — %s", exc)
         except Exception:  # noqa: BLE001
+            db.rollback()
             logger.exception(
                 "SBI Kiosk autosend: send failed; will retry in %s min.", settings.autosend_recheck_minutes,
             )

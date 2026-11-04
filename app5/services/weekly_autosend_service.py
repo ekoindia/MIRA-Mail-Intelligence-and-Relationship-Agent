@@ -112,10 +112,13 @@ def run_weekly_send_now(db, today) -> dict:
             out = send_combined_digest(
                 db, "Weekly", level, _SYSTEM_USER, force_draft=False, bypass_rbo_safety_net=True,
             )
+            db.commit()
             results.append({"level": level.value, "status": "sent", **out})
         except ValueError as exc:
+            db.commit()
             results.append({"level": level.value, "status": "skipped", "reason": str(exc)})
         except Exception as exc:  # noqa: BLE001
+            db.rollback()
             logger.exception("Weekly autosend: level %s failed.", level.value)
             results.append({"level": level.value, "status": "failed", "reason": str(exc)})
         finally:
