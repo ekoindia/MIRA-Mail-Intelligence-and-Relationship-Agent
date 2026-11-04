@@ -20,3 +20,6 @@ Report_Templates_Review.docx
 
 # Child repositories/directories we don't want to track
 sbi_email_automation/
+
+# Duplicate-send guard markers (runtime state, see services/send_guard.py)
+app5/data/send_guard/
