@@ -144,6 +144,14 @@ This is a real, actively-used production system — the account it sends from is
 
 **What lives outside git entirely** (both `.env` and `*.db*` are gitignored by design): the server's `app5/.env` (real credentials, `PUBLIC_BASE_URL`) and `app5/data/app.db` (email template bodies, all report config, all send history) are **not version-controlled** — they're the live, stateful parts of the deployment. Template body edits made via direct SQL or the Templates API on the server exist **only in that one SQLite file** until someone deliberately exports/syncs them elsewhere. Before assuming local and server have diverged, compare directly (e.g. hash `email_templates.subject + body_html` per row) rather than relying on git status, which will show both as clean even when their live content differs.
 
+## Duplicate-send guard (`services/send_guard.py`)
+
+On 2026-11-04 the Daily autosend re-sent the same reports every ~4 minutes for an hour: the run's single long transaction hit `database is locked` on its final write, everything rolled back (job, EmailLog rows, "sent today" flag), but the mail had already left Gmail, so each next poller tick sent it all again. Delivery Logs showed nothing; Gmail Sent showed hundreds.
+
+`send_guard` writes a small JSON marker under `app5/data/send_guard/` (outside the DB, so no rollback can erase it) the moment an autosend-fired report sends its first mail (`run_distribution_job` → `mark_autosend_mail_sent`, active only inside the `autosend_report` context the Daily, SBI Kiosk and Weekly cycles set). Any later tick that finds a report already marked for today logs an ERROR and never re-sends it. A failure *before* any mail went out (no marker) still retries hourly. `limit_forward_service` records each forwarded incoming id the same way. Never route a real send around this guard.
+
+**Note:** despite the "DRAFT ONLY" wording under Limit-approval forwarding above, `limit_forward_service.create_forward_sends` and `scheduler_service._run_limit_forward_cycle` really **send** (`gs.send_message`) when `limit_forward_drafts_enabled` is on — confirm with the user which behaviour is intended.
+
 ## Known issues / current state (as of 2026-09-17)
 
 - **A recipient's card can 404 "link no longer valid" within the first few minutes of a send** — root cause is the long-held single-transaction batch send described under Scheduler jobs above. Diagnosed, not yet fixed; a real occurrence was confirmed to resolve itself once that day's batch job fully committed.

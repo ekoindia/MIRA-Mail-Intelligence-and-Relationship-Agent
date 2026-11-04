@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 from config import settings
 from database.db import get_db
 from database.models import AppSetting, DistributionJob, EmailLog, EmailStatus, EmailTemplate, JobStatus, ReportUpload
+from services import send_guard
 from services.audit_service import log_action
 from services.report_aggregation_service import TEMPLATE_VARIABLE_DEFAULTS
 from utils.helpers import (
@@ -419,6 +420,7 @@ def run_distribution_job(
 
             log_row.attempt_count += attempt
             if success:
+                send_guard.mark_autosend_mail_sent()
                 log_row.status = EmailStatus.SENT
                 log_row.sent_at = datetime.utcnow()
                 log_row.sent_via = sent_via

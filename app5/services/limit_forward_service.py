@@ -36,6 +36,7 @@ from config import settings
 from database.db import get_db
 from database.incoming_models import ExtractedTask, IncomingEmail
 from services import gmail_service as gs
+from services import send_guard
 from services.incoming_service import _sender_email, extract_task_identifiers
 from utils.logger import get_logger
 
@@ -134,8 +135,12 @@ def create_forward_sends(max_items: int = 25, since=None) -> dict:
         ]
 
     # Apply the safety guard before touching Gmail at all.
+    already_forwarded = send_guard.forwarded_recently()
     safe = []
     for cid, thread, sender, subject, body, received in candidates:
+        if str(cid) in already_forwarded:
+            logger.error("Skipping %s — already forwarded but its DB row was not saved; not sending again.", cid)
+            continue
         if _is_from_forward_target(sender):
             summary["skipped_from_target"] += 1
             logger.info("Skipping %s — it is FROM the forward target (%s)", cid, FORWARD_TO)
@@ -172,6 +177,7 @@ def create_forward_sends(max_items: int = 25, since=None) -> dict:
                     attachment_path=None,
                     cc_emails=FORWARD_CC,
                 )
+                send_guard.mark_forwarded(cid)
                 row.ack_draft_id = sent_id
                 summary["sent"] += 1
         except Exception as exc:  # noqa: BLE001

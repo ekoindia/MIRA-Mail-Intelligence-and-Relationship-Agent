@@ -52,6 +52,7 @@ from services.automation_settings_service import (
     get_weekly_autosend_enabled,
 )
 from services.calling_sheet_freshness_service import check_freshness, is_confirmed_fresh_today
+from services import send_guard
 from services.combined_digest_service import automated_reports_for_level, send_combined_digest
 from services.snapshot_service import capture_weekly_baseline_snapshot, get_snapshot
 from utils.logger import get_logger
@@ -95,11 +96,18 @@ def run_weekly_send_now(db, today) -> dict:
     automated reports, no recipients) is recorded as skipped, not fatal to
     the other levels."""
     results = []
+    started = send_guard.autosend_reports_started_today()
     for level in _LEVELS:
         reports = automated_reports_for_level(db, "Weekly", level)
         if not reports:
             results.append({"level": level.value, "status": "skipped", "reason": "no automated reports"})
             continue
+        guard_name = f"Weekly digest — {level.value}"
+        if guard_name in started:
+            logger.error("Weekly autosend: %s already sent mail today — NOT sending it again.", level.value)
+            results.append({"level": level.value, "status": "skipped", "reason": "already sent today"})
+            continue
+        token = send_guard.autosend_report.set(guard_name)
         try:
             out = send_combined_digest(
                 db, "Weekly", level, _SYSTEM_USER, force_draft=False, bypass_rbo_safety_net=True,
@@ -110,6 +118,8 @@ def run_weekly_send_now(db, today) -> dict:
         except Exception as exc:  # noqa: BLE001
             logger.exception("Weekly autosend: level %s failed.", level.value)
             results.append({"level": level.value, "status": "failed", "reason": str(exc)})
+        finally:
+            send_guard.autosend_report.reset(token)
 
     _set_setting(db, _KEY_LAST_SENT_MONDAY, today.isoformat())
     db.flush()

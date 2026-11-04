@@ -54,6 +54,7 @@ from services.automation_settings_service import (
     get_autosend_enabled,
     get_autosend_skip_weekdays,
 )
+from services import send_guard
 from services.calling_sheet_freshness_service import check_freshness, is_confirmed_fresh_today
 from services.report_send_service import send_report_now
 from utils.logger import get_logger
@@ -202,10 +203,23 @@ def check_and_run_daily_autosend() -> None:
             .all()
         )
         done = _done_reports_today(db, today_str)
+        started = send_guard.autosend_reports_started_today()
         sent, skipped, failed = 0, 0, 0
         for rm in reports:
             if rm.report_name in done:
                 continue
+            if rm.report_name in started:
+                # Mail already went out today but that run's DB rows were
+                # lost (rolled back). Never re-send automatically.
+                skipped += 1
+                done.add(rm.report_name)
+                logger.error(
+                    "Autosend: '%s' already sent mail earlier today but that run did not finish "
+                    "saving — NOT sending it again. Check Gmail Sent before any manual resend.",
+                    rm.report_name,
+                )
+                continue
+            token = send_guard.autosend_report.set(rm.report_name)
             try:
                 # force_draft=False: this cycle now sends for real whenever
                 # a report's own delivery_mode says "send" — draft-only is
@@ -223,6 +237,8 @@ def check_and_run_daily_autosend() -> None:
             except Exception as exc:  # noqa: BLE001
                 failed += 1
                 logger.exception("Autosend: send failed for '%s': %s", rm.report_name, exc)
+            finally:
+                send_guard.autosend_report.reset(token)
 
         _set_setting(db, _KEY_DONE_REPORTS, json.dumps({"date": today_str, "names": sorted(done)}))
         if failed:
@@ -256,6 +272,7 @@ def check_and_run_daily_autosend() -> None:
 _SBI_KEY_LAST_CHECK_AT = "sbikiosk_autosend_last_check_at"
 _SBI_KEY_LAST_SENT_DATE = "sbikiosk_autosend_last_sent_date"
 _SBI_KEY_RETRY_AFTER = "sbikiosk_autosend_retry_after"
+_SBI_KIOSK_GUARD_NAME = "SBI Kiosk (Internal digest)"
 
 
 def check_and_run_sbi_kiosk_growth_autosend() -> None:
@@ -337,6 +354,16 @@ def check_and_run_sbi_kiosk_growth_autosend() -> None:
 
         from services.combined_digest_service import send_combined_digest
 
+        if _SBI_KIOSK_GUARD_NAME in send_guard.autosend_reports_started_today():
+            logger.error(
+                "SBI Kiosk autosend: already sent earlier today but that run did not finish saving — "
+                "NOT sending again."
+            )
+            _set_setting(db, _SBI_KEY_LAST_SENT_DATE, today_str)
+            db.flush()
+            return
+
+        token = send_guard.autosend_report.set(_SBI_KIOSK_GUARD_NAME)
         try:
             result = send_combined_digest(db, "Daily", OrgLevel.INTERNAL, _SYSTEM_USER, force_draft=False)
             logger.info("SBI Kiosk autosend: sent — %s", result)
@@ -349,6 +376,8 @@ def check_and_run_sbi_kiosk_growth_autosend() -> None:
             _schedule_retry(db, _SBI_KEY_RETRY_AFTER, now)
             db.flush()
             return
+        finally:
+            send_guard.autosend_report.reset(token)
 
         _set_setting(db, _SBI_KEY_LAST_SENT_DATE, today_str)
         db.flush()
