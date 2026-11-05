@@ -40,6 +40,7 @@ const REASON: Record<string, string> = {
   incoming_new_category: "Many incoming mails share a subject no reply category covers.",
   incoming_low_confidence: "A reply category keeps matching incoming mail with low confidence.",
   incoming_ingest_error: "Some incoming mails were fetched but couldn't be processed.",
+  incoming_learned_rule: "MIRA compared its acknowledgment drafts with the replies people actually sent.",
 };
 
 function formatWhen(iso: string | null): string {

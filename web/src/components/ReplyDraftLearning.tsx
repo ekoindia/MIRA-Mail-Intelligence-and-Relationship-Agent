@@ -1,7 +1,84 @@
 import { Fragment, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../lib/api";
-import { Card, CardHeader, Badge, EmptyState, LoadingBlock, Table, Th, Td } from "./ui";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, apiErrorMessage } from "../lib/api";
+import { Card, CardHeader, Badge, Button, EmptyState, LoadingBlock, Table, Th, Td } from "./ui";
+
+interface LearnedRule {
+  id: number; template: string; action: "add" | "remove"; phrase: string; condition: string | null;
+  reason: string | null; support: number; status: "active" | "switched_off";
+  activatedAt: string | null; switchedOffAt: string | null; switchedOffReason: string | null;
+  switchedOffBy: string | null; baselineAsIsRate: number | null;
+  measuredDrafts: number; measuredAsIsRate: number | null;
+}
+
+function LearnedRules() {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const { data: rules } = useQuery<LearnedRule[]>({
+    queryKey: ["reply-rules"],
+    queryFn: async () => (await api.get("/api/incoming/reply-rules")).data,
+  });
+  const switchOff = useMutation({
+    mutationFn: async (id: number) => (await api.post(`/api/incoming/reply-rules/${id}/switch-off`)).data,
+    onSuccess: () => { setError(null); queryClient.invalidateQueries({ queryKey: ["reply-rules"] }); },
+    onError: (err) => setError(apiErrorMessage(err, "Couldn't switch this rule off.")),
+  });
+
+  return (
+    <div className="mx-5 mt-4">
+      <div className="mb-2 text-sm font-semibold text-ink-900">What MIRA has learned</div>
+      <p className="mb-2 text-xs text-ink-500">
+        Changes people make again and again before sending a draft become rules for the next drafts. A rule
+        needs at least 3 different emails as evidence, turns on by itself, and switches itself off if people keep
+        undoing it or drafts get edited more. Drafts are never sent automatically.
+      </p>
+      {error && <div className="mb-2 rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-700">{error}</div>}
+      {!rules || rules.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-ink-200 px-4 py-5 text-center text-xs text-ink-500">
+          Nothing learned yet. Rules appear once a template has at least 5 sent replies and people keep making
+          the same change.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {rules.map((r) => (
+            <div key={r.id} className="rounded-lg border border-ink-200 bg-white px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone={r.status === "active" ? "green" : "slate"}>
+                      {r.status === "active" ? "On" : "Switched off"}
+                    </Badge>
+                    <span className="text-xs font-medium text-ink-500">{r.template}</span>
+                  </div>
+                  <div className="mt-1 text-sm text-ink-900">
+                    {r.action === "add" ? "Adds" : "Leaves out"}
+                    {r.condition ? <> when the mail mentions <b>“{r.condition}”</b></> : " always"}:{" "}
+                    <span className={r.action === "add" ? "text-good-fg" : "text-rose-700 line-through"}>“{r.phrase}”</span>
+                  </div>
+                  {r.reason && <div className="mt-1 text-xs text-ink-600"><b>Why:</b> {r.reason}</div>}
+                  <div className="mt-1 text-xs text-ink-500">
+                    <b>Learned:</b> {fmt(r.activatedAt)} · <b>Sent unchanged before:</b> {pct(r.baselineAsIsRate)} ·{" "}
+                    <b>With this rule:</b> {r.measuredDrafts ? `${pct(r.measuredAsIsRate)} of ${r.measuredDrafts} sent` : "not measured yet"}
+                  </div>
+                  {r.status === "switched_off" && (
+                    <div className="mt-1 text-xs text-ink-500">
+                      <b>Switched off</b> {fmt(r.switchedOffAt)} by {r.switchedOffBy}: {r.switchedOffReason}
+                    </div>
+                  )}
+                </div>
+                {r.status === "active" && (
+                  <Button size="sm" variant="ghost" onClick={() => switchOff.mutate(r.id)} disabled={switchOff.isPending}>
+                    Turn off
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 type Outcome = "pending" | "sent_as_is" | "edited" | "replied_separately" | "not_used";
 
@@ -83,7 +160,7 @@ export default function ReplyDraftLearning() {
     <Card>
       <CardHeader
         title="Reply Drafts — What Happened to Them"
-        subtitle="Every acknowledgment draft compared with the reply actually sent on its thread: sent as-is, edited, replied separately, or not used. Measurement only — nothing here drafts, sends, or changes a template."
+        subtitle="Every acknowledgment draft compared with the reply actually sent on its thread: sent as-is, edited, replied separately, or not used. What people keep changing is learned for the next drafts — nothing here sends anything."
       />
       {isLoading || !summary || !t ? (
         <LoadingBlock />
@@ -132,6 +209,8 @@ export default function ReplyDraftLearning() {
               </tbody>
             </Table>
           </div>
+
+          <LearnedRules />
 
           <div className="mx-5 mb-5 mt-4">
             <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-ink-500">

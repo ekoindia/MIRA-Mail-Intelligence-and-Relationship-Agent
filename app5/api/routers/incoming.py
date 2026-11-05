@@ -373,6 +373,24 @@ def reply_drafts_detail(
     return detail(template=template, outcome=outcome, page=page, page_size=pageSize)
 
 
+@router.get("/reply-rules")
+def reply_rules(user: dict = Depends(get_current_user)):
+    """Changes MIRA learned from edited ack drafts, active and switched off."""
+    from services.reply_learning_service import list_rules
+
+    return list_rules()
+
+
+@router.post("/reply-rules/{rule_id}/switch-off")
+def switch_off_reply_rule(rule_id: int, user: dict = Depends(get_current_user)):
+    from services.reply_learning_service import switch_off_rule
+
+    try:
+        return switch_off_rule(rule_id, user.get("username") or "unknown")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/ack-detail")
 def ack_detail(
     category: str | None = Query(None),

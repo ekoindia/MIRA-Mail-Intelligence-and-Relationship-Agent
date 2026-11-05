@@ -141,10 +141,13 @@ def compare(drafted_text: str, sent_reply_text: str, signature_text: str = "") -
 # Recording
 # ----------------------------------------------------------------------
 def record_ack_draft(db, row: IncomingEmail, tpl: IncomingReplyTemplate, template_category: str,
-                     signature_html: str | None, draft_id: str) -> None:
+                     body_html: str, signature_html: str | None, draft_id: str,
+                     applied_rule_ids: list[int] | None = None) -> None:
     """Called right after an ack draft is created, inside the caller's
-    session. Never raises: a logging problem must not undo the draft's
-    ack_draft_id and cause a second draft next cycle."""
+    session. `body_html` is the draft body as sent to Gmail minus the
+    signature, i.e. the template with any learned rules applied. Never
+    raises: a logging problem must not undo the draft's ack_draft_id and
+    cause a second draft next cycle."""
     try:
         if db.query(ReplyDraftLog.id).filter(ReplyDraftLog.incoming_email_id == row.id).first():
             return
@@ -154,9 +157,10 @@ def record_ack_draft(db, row: IncomingEmail, tpl: IncomingReplyTemplate, templat
             gmail_draft_id=draft_id,
             template_id=tpl.id,
             template_category=template_category,
-            drafted_text="\n".join(_sentences(_html_to_text(tpl.body_template))),
+            drafted_text="\n".join(_sentences(_html_to_text(body_html))),
             signature_text="\n".join(_sentences(_html_to_text(signature_html))),
             drafted_at=datetime.utcnow(),
+            applied_rules_json=json.dumps(applied_rule_ids or []),
         ))
     except Exception:  # noqa: BLE001
         logger.exception("Could not record reply draft log for incoming %s", row.id)
@@ -265,12 +269,296 @@ def check_reply_draft_outcomes(max_items: int = 300) -> dict:
     return summary
 
 
+_last_learn_run: datetime | None = None
+_LEARN_EVERY = timedelta(minutes=30)
+
+
 def refresh_reply_learning(get_signature=None) -> dict:
-    """Poller entry point: log any older drafts, then settle pending ones.
+    """Poller entry point: log any older drafts, settle pending ones, and
+    every 30 minutes learn new rules and check the active ones.
     `get_signature` is a callable returning the account's signature HTML."""
+    global _last_learn_run
     backfilled = backfill_reply_draft_logs(get_signature)
     outcomes = check_reply_draft_outcomes()
-    return {"backfilled": backfilled, **outcomes}
+    result = {"backfilled": backfilled, **outcomes}
+    now = datetime.utcnow()
+    if _last_learn_run is None or now - _last_learn_run >= _LEARN_EVERY:
+        _last_learn_run = now
+        result["switched_off"] = len(evaluate_learned_rules())
+        result["learned"] = len(learn_reply_rules())
+    return result
+
+
+# ----------------------------------------------------------------------
+# Part 2: learn from edits, apply to the next draft, measure, switch off
+# ----------------------------------------------------------------------
+LEARN_WINDOW = timedelta(days=90)
+LEARN_MIN_SENT = 5          # sent replies for a template before anything is learned
+LEARN_MIN_SUPPORT = 3       # a change must happen in at least this many different emails
+LEARN_ALWAYS_RATE = 0.6     # ... and in this share of sent replies to apply always
+COND_PRECISION = 0.8        # conditional: the change happens this often when the word is present
+COND_RECALL = 0.8           # ... and the word is present this often when the change happens
+EVAL_MIN_DRAFTS = 5         # sent drafts with a rule before judging it
+SWITCH_OFF_UNDO_RATE = 0.4  # people undo the rule this often -> switch off
+SWITCH_OFF_DROP = 0.15      # as-is rate falls this far below the baseline -> switch off
+
+_DECIDED = ("sent_as_is", "edited")
+_STOPWORDS = {
+    "this", "that", "with", "from", "have", "your", "will", "please", "dear", "regards", "thanks",
+    "thank", "sir", "madam", "kindly", "find", "attached", "attachment", "mail", "email", "date",
+    "report", "sbi", "bank", "branch", "india", "state", "team", "also", "below", "above", "same",
+    "been", "were", "they", "their", "there", "which", "would", "should", "into", "about", "subject",
+}
+
+
+def _learnable(phrase: str) -> bool:
+    """Only generic wording is learned. A phrase with a number, an id or an
+    address belongs to one email (ticket, CSP code, date, contact) and can't
+    be reused in the next draft."""
+    if re.search(r"\d", phrase) or "@" in phrase:
+        return False
+    return len(phrase.split()) >= 3
+
+
+def _mail_words(subject: str | None, body: str | None) -> set[str]:
+    text = f"{subject or ''} {(body or '')[:600]}".lower()
+    return {w for w in re.findall(r"[a-z]{4,}", text) if w not in _STOPWORDS}
+
+
+def _notify(fingerprint: str, title: str, description: str) -> None:
+    """Tell the user on the Suggestions page (Incoming tab). Information
+    only: switching a rule off is done from the Reply Drafts panel."""
+    from services.suggestion_service import _upsert
+
+    try:
+        with get_db() as db:
+            _upsert(
+                db, category="incoming_learned_rule", title=title, description=description,
+                severity="info", entity_type="LearnedReplyRule", entity_id=None,
+                fingerprint=fingerprint, can_auto_fix=False,
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not post learned-rule notice")
+
+
+def _rule_text(rule) -> str:
+    when = f" when the mail mentions '{rule.condition_keyword}'" if rule.condition_keyword else " always"
+    verb = "add" if rule.action == "add" else "leave out"
+    return f"Rule for the '{rule.template_category}' draft — {verb}{when}: \"{rule.phrase}\""
+
+
+def learn_reply_rules() -> list[int]:
+    """Finds edits people make again and again and turns them into active
+    rules. Returns the ids of rules created this run."""
+    from database.incoming_models import LearnedReplyRule
+
+    since = datetime.utcnow() - LEARN_WINDOW
+    with get_db() as db:
+        rows = (
+            db.query(ReplyDraftLog, IncomingEmail.subject, IncomingEmail.body_text)
+            .join(IncomingEmail, IncomingEmail.id == ReplyDraftLog.incoming_email_id)
+            .filter(ReplyDraftLog.outcome.in_(_DECIDED), ReplyDraftLog.drafted_at >= since)
+            .all()
+        )
+        items = [{
+            "id": log.incoming_email_id, "template": log.template_category, "outcome": log.outcome,
+            "added": json.loads(log.added_json) if log.added_json else [],
+            "removed": json.loads(log.removed_json) if log.removed_json else [],
+            "words": _mail_words(subject, body), "subject": subject,
+        } for log, subject, body in rows]
+        known = {
+            (r.template_category, r.action, r.phrase_key, r.condition_keyword)
+            for r in db.query(LearnedReplyRule).all()
+        }
+
+    by_template: dict[str, list[dict]] = {}
+    for it in items:
+        by_template.setdefault(it["template"] or "", []).append(it)
+
+    created: list[int] = []
+    for template, group in by_template.items():
+        n = len(group)
+        if not template or n < LEARN_MIN_SENT:
+            continue
+        baseline = sum(1 for g in group if g["outcome"] == "sent_as_is") / n
+        for action, field in (("add", "added"), ("remove", "removed")):
+            seen: dict[str, dict] = {}
+            for g in group:
+                for p in {p for p in g[field] if _learnable(p)}:
+                    entry = seen.setdefault(_key(p), {"phrase": p, "emails": []})
+                    entry["emails"].append(g)
+            for key, entry in seen.items():
+                support = len({g["id"] for g in entry["emails"]})
+                if support < LEARN_MIN_SUPPORT:
+                    continue
+                condition, reason = None, None
+                if support / n >= LEARN_ALWAYS_RATE:
+                    done = "added this line" if action == "add" else "deleted this line"
+                    reason = f"People {done} in {support} of the {n} '{template}' replies they sent."
+                elif action == "add":
+                    best = None
+                    for w in set().union(*(g["words"] for g in entry["emails"])):
+                        with_word = [g for g in group if w in g["words"]]
+                        hits = sum(1 for g in entry["emails"] if w in g["words"])
+                        precision, recall = hits / len(with_word), hits / support
+                        if precision >= COND_PRECISION and recall >= COND_RECALL:
+                            if best is None or precision + recall > best[1]:
+                                best = (w, precision + recall, hits, len(with_word))
+                    if best:
+                        condition = best[0]
+                        others = n - best[3]
+                        reason = (
+                            f"People added this line in {best[2]} of {best[3]} replies to mails that mention "
+                            f"'{condition}', and in {support - best[2]} of {others} replies to mails that don't."
+                        )
+                if reason is None or (template, action, key, condition) in known:
+                    continue
+                with get_db() as db:
+                    rule = LearnedReplyRule(
+                        template_category=template, action=action, phrase=entry["phrase"], phrase_key=key,
+                        condition_keyword=condition, support=support, opportunities=n, reason=reason,
+                        evidence_json=json.dumps([
+                            {"incomingEmailId": g["id"], "subject": g["subject"]} for g in entry["emails"][:10]
+                        ]),
+                        baseline_as_is_rate=round(baseline, 3), status="active",
+                    )
+                    db.add(rule)
+                    db.flush()
+                    created.append(rule.id)
+                    text = _rule_text(rule)
+                    fp = f"learned_rule:{rule.id}"
+                known.add((template, action, key, condition))
+                _notify(fp, "MIRA learned a change to an acknowledgment draft",
+                        f"{text}. Why: {reason} It is already on for new drafts and switches itself off if "
+                        f"drafts with it get edited more. Turn it off any time from Dashboard → Incoming → "
+                        f"Reply Drafts.")
+                logger.info("Learned reply rule %s: %s", rule.id, text)
+    return created
+
+
+def apply_learned_rules(db, template_category: str, body_html: str,
+                        subject: str | None, body_text: str | None) -> tuple[str, list[int]]:
+    """The draft body with every matching active rule applied. Additions go in
+    as their own paragraph before the closing one; removals take the phrase
+    out where it appears in the template text. Returns the rule ids used."""
+    from database.incoming_models import LearnedReplyRule
+
+    rules = (
+        db.query(LearnedReplyRule)
+        .filter(LearnedReplyRule.template_category == template_category, LearnedReplyRule.status == "active")
+        .order_by(LearnedReplyRule.id)
+        .all()
+    )
+    mail_text = f"{subject or ''} {(body_text or '')[:600]}".lower()
+    html_out, applied = body_html, []
+    for rule in rules:
+        if rule.condition_keyword and rule.condition_keyword not in mail_text:
+            continue
+        if rule.action == "remove":
+            pattern = re.compile(re.escape(rule.phrase), re.IGNORECASE)
+            if pattern.search(html_out):
+                html_out = re.sub(r"<p>\s*</p>", "", pattern.sub("", html_out, count=1))
+                applied.append(rule.id)
+        elif rule.phrase_key not in _key(_html_to_text(html_out)):
+            para = f"<p>{html_lib.escape(rule.phrase)}</p>"
+            last = html_out.lower().rfind("<p")
+            html_out = html_out[:last] + para + html_out[last:] if last > 0 else html_out + para
+            applied.append(rule.id)
+    return html_out, applied
+
+
+def evaluate_learned_rules() -> list[int]:
+    """Judges each active rule on the drafts that carried it. Switched off
+    when people keep undoing it, or when drafts get edited more than before.
+    Returns the ids switched off this run."""
+    from database.incoming_models import LearnedReplyRule
+
+    switched: list[int] = []
+    with get_db() as db:
+        active = [r.id for r in db.query(LearnedReplyRule).filter(LearnedReplyRule.status == "active").all()]
+    for rule_id in active:
+        with get_db() as db:
+            rule = db.query(LearnedReplyRule).get(rule_id)
+            logs = (
+                db.query(ReplyDraftLog)
+                .filter(
+                    ReplyDraftLog.template_category == rule.template_category,
+                    ReplyDraftLog.drafted_at >= rule.activated_at,
+                    ReplyDraftLog.outcome.in_(_DECIDED),
+                    ReplyDraftLog.applied_rules_json.isnot(None),
+                )
+                .all()
+            )
+            carried = [lg for lg in logs if rule.id in json.loads(lg.applied_rules_json or "[]")]
+            n = len(carried)
+            rule.measured_drafts = n
+            if n == 0:
+                continue
+            as_is = sum(1 for lg in carried if lg.outcome == "sent_as_is") / n
+            rule.measured_as_is_rate = round(as_is, 3)
+            if n < EVAL_MIN_DRAFTS:
+                continue
+            undo_field = "removed_json" if rule.action == "add" else "added_json"
+            undone = sum(
+                1 for lg in carried
+                if any(rule.phrase_key in _key(p) or _key(p) in rule.phrase_key
+                       for p in json.loads(getattr(lg, undo_field) or "[]"))
+            )
+            reason = None
+            if undone / n >= SWITCH_OFF_UNDO_RATE:
+                what = "removed this learned line" if rule.action == "add" else "put this line back"
+                reason = f"People {what} in {undone} of {n} drafts that carried it."
+            elif rule.baseline_as_is_rate is not None and as_is < rule.baseline_as_is_rate - SWITCH_OFF_DROP:
+                reason = (
+                    f"Drafts got worse with it: sent unchanged {round(as_is * 100)}% of the time, "
+                    f"down from {round(rule.baseline_as_is_rate * 100)}% before."
+                )
+            if reason:
+                rule.status = "switched_off"
+                rule.switched_off_at = datetime.utcnow()
+                rule.switched_off_reason = reason
+                rule.switched_off_by = "auto-check"
+                switched.append(rule.id)
+                text = _rule_text(rule)
+        if rule_id in switched:
+            _notify(f"rule_off:{rule_id}", "MIRA switched off a learned draft change",
+                    f"{text}. Switched off because: {reason}")
+            logger.info("Switched off reply rule %s: %s", rule_id, reason)
+    return switched
+
+
+def switch_off_rule(rule_id: int, username: str) -> dict:
+    from database.incoming_models import LearnedReplyRule
+    from services.audit_service import log_action
+
+    with get_db() as db:
+        rule = db.query(LearnedReplyRule).get(rule_id)
+        if rule is None:
+            raise ValueError("Rule not found.")
+        if rule.status != "active":
+            raise ValueError("This rule is already off.")
+        rule.status = "switched_off"
+        rule.switched_off_at = datetime.utcnow()
+        rule.switched_off_reason = "Switched off by hand."
+        rule.switched_off_by = username
+        log_action(db, "SWITCH_OFF_LEARNED_REPLY_RULE", username=username,
+                   entity_type="LearnedReplyRule", entity_id=rule.id, details=_rule_text(rule))
+        return {"id": rule.id, "status": rule.status}
+
+
+def list_rules() -> list[dict]:
+    from database.incoming_models import LearnedReplyRule
+    from utils.helpers import utc_iso
+
+    with get_db() as db:
+        return [{
+            "id": r.id, "template": r.template_category, "action": r.action, "phrase": r.phrase,
+            "condition": r.condition_keyword, "reason": r.reason, "support": r.support,
+            "status": r.status, "activatedAt": utc_iso(r.activated_at),
+            "switchedOffAt": utc_iso(r.switched_off_at), "switchedOffReason": r.switched_off_reason,
+            "switchedOffBy": r.switched_off_by, "baselineAsIsRate": r.baseline_as_is_rate,
+            "measuredDrafts": r.measured_drafts, "measuredAsIsRate": r.measured_as_is_rate,
+        } for r in db.query(LearnedReplyRule).order_by(LearnedReplyRule.activated_at.desc()).all()]
 
 
 # ----------------------------------------------------------------------

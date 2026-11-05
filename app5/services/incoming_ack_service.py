@@ -72,7 +72,7 @@ from database.db import get_db
 from database.incoming_models import IncomingAttachment, IncomingEmail, IncomingReplyTemplate
 from services import gmail_service as gs
 from services.incoming_service import _sender_email
-from services.reply_learning_service import record_ack_draft
+from services.reply_learning_service import apply_learned_rules, record_ack_draft
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -528,7 +528,16 @@ def create_ack_drafts(max_items: int = 25, since=None) -> dict:
                 to_email = _sender_email(row.sender)
                 if not to_email:
                     continue
-                body_html = tpl.body_template + (signature or "")
+                # Learned rules (reply_learning_service) refine the template
+                # text; any problem there falls back to the plain template.
+                try:
+                    body_core, applied_rules = apply_learned_rules(
+                        db, template_category, tpl.body_template, row.subject, row.body_text,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("Learned reply rules failed for incoming %s; using the plain template", cid)
+                    body_core, applied_rules = tpl.body_template, []
+                body_html = body_core + (signature or "")
                 # Real reply threading, not a lookalike new email: the
                 # original RFC Message-ID becomes In-Reply-To/References,
                 # and Gmail's own thread id groups it in the same
@@ -551,7 +560,7 @@ def create_ack_drafts(max_items: int = 25, since=None) -> dict:
                     thread_id=row.gmail_thread_id,
                 )
                 row.ack_draft_id = draft_id
-                record_ack_draft(db, row, tpl, template_category, signature, draft_id)
+                record_ack_draft(db, row, tpl, template_category, body_core, signature, draft_id, applied_rules)
                 summary["drafted"] += 1
         except Exception as exc:  # noqa: BLE001
             logger.error("Ack draft failed for incoming %s: %s", cid, exc)

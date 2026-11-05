@@ -280,8 +280,49 @@ class ReplyDraftLog(Base):
     added_json = Column(Text, nullable=True)        # sentences in the sent reply but not the draft
     removed_json = Column(Text, nullable=True)      # sentences in the draft but not the sent reply
     checked_at = Column(DateTime, nullable=True)
+    applied_rules_json = Column(Text, nullable=True)  # ids of LearnedReplyRule applied to this draft
 
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class LearnedReplyRule(Base):
+    """
+    A change MIRA learned from how people edit its ack drafts before sending
+    them: always (or, with condition_keyword, only when the incoming mail
+    mentions that word) add or remove a phrase. Applied on top of the
+    template when the next draft is built; the template text itself is
+    never rewritten, so every rule stays visible and can be switched off on
+    its own. Turned on automatically when the evidence is strong (decided by
+    the user on 2026-11-05) and switched off automatically if drafts with it
+    get worse. Drafts stay drafts: a person still sends every reply.
+    """
+    __tablename__ = "learned_reply_rules"
+
+    id = Column(Integer, primary_key=True)
+    template_category = Column(String(150), nullable=False, index=True)
+    action = Column(String(10), nullable=False)            # "add" | "remove"
+    phrase = Column(Text, nullable=False)                  # as people wrote it
+    phrase_key = Column(String(500), nullable=False)       # normalised, for matching
+    condition_keyword = Column(String(60), nullable=True)  # None = always
+
+    support = Column(Integer, default=0)       # distinct emails where people made this change
+    opportunities = Column(Integer, default=0) # sent replies for this template when learned
+    reason = Column(Text, nullable=True)       # human-readable "what and why"
+    evidence_json = Column(Text, nullable=True)
+    baseline_as_is_rate = Column(Float, nullable=True)
+
+    status = Column(String(20), default="active", nullable=False, index=True)  # active | switched_off
+    activated_at = Column(DateTime, default=datetime.utcnow)
+    switched_off_at = Column(DateTime, nullable=True)
+    switched_off_reason = Column(Text, nullable=True)
+    switched_off_by = Column(String(100), nullable=True)   # "auto-check" or a username
+
+    measured_drafts = Column(Integer, default=0)
+    measured_as_is_rate = Column(Float, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("template_category", "action", "phrase_key", "condition_keyword", name="uq_learned_rule"),
+    )
 
 
 class IncomingReplyTemplate(Base):

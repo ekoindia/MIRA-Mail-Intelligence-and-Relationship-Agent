@@ -162,6 +162,7 @@ def _run_lightweight_migrations() -> None:
         ("email_logs", "csp_breakdown_json", "TEXT"),
         ("email_logs", "detail_opened_at", "DATETIME"),
         ("email_logs", "detail_open_count", "INTEGER"),
+        ("reply_draft_logs", "applied_rules_json", "TEXT"),
     ]
 
     with engine.begin() as conn:
