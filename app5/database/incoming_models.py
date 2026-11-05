@@ -243,6 +243,47 @@ class IncomingProcessState(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class ReplyDraftLog(Base):
+    """
+    One acknowledgment DRAFT this app created for an incoming email, and
+    what a human finally did with it — the record behind the reply-draft
+    learning loop (services/reply_learning_service.py). Stores the exact
+    text drafted (template + signature kept apart) so it can later be
+    compared with the reply actually sent on the same thread, read from
+    SentEmail. Read-only towards Gmail: nothing here drafts or sends.
+
+    outcome: pending (no sent reply seen yet), sent_as_is, edited,
+    replied_separately (a reply went out but barely resembles the draft),
+    not_used (no reply on the thread within the waiting window).
+    """
+    __tablename__ = "reply_draft_logs"
+
+    id = Column(Integer, primary_key=True)
+    incoming_email_id = Column(Integer, ForeignKey("incoming_emails.id"), nullable=False, unique=True, index=True)
+    gmail_thread_id = Column(String(255), nullable=True, index=True)
+    gmail_draft_id = Column(String(255), nullable=True)
+
+    template_id = Column(Integer, ForeignKey("incoming_reply_templates.id"), nullable=True)
+    template_category = Column(String(150), nullable=True, index=True)
+    drafted_text = Column(Text, nullable=True)      # template body as plain sentences, one per line
+    signature_text = Column(Text, nullable=True)    # kept apart so it never counts as an edit
+    drafted_at = Column(DateTime, nullable=True)
+    # True when reconstructed later from the current template for a draft
+    # made before this log existed — approximate, shown as such.
+    backfilled = Column(Boolean, default=False, nullable=False)
+
+    outcome = Column(String(20), default="pending", nullable=False, index=True)
+    sent_gmail_message_id = Column(String(255), nullable=True)
+    sent_at = Column(DateTime, nullable=True)
+    sent_text = Column(Text, nullable=True)         # the reply part only, quoted history removed
+    similarity = Column(Float, nullable=True)       # 0..1, draft vs sent
+    added_json = Column(Text, nullable=True)        # sentences in the sent reply but not the draft
+    removed_json = Column(Text, nullable=True)      # sentences in the draft but not the sent reply
+    checked_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class IncomingReplyTemplate(Base):
     """
     A reusable reply for one recurring INCOMING request category (e.g.

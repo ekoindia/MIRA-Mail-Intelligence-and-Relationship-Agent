@@ -215,6 +215,22 @@ def check_and_run_incoming_sync() -> None:
     except Exception:  # noqa: BLE001
         logger.exception("Sent-mail sync poller failed.")
 
+    # Needs the Sent folder scanned above: compares each ack draft with the
+    # reply actually sent on its thread. Read-only, never drafts or sends.
+    try:
+        from services import gmail_service as gs
+        from services.reply_learning_service import refresh_reply_learning
+
+        def _signature():
+            try:
+                return gs.get_default_signature(gs.get_gmail_client())
+            except Exception:  # noqa: BLE001
+                return None
+
+        refresh_reply_learning(_signature)
+    except Exception:  # noqa: BLE001
+        logger.exception("Reply draft learning check failed.")
+
 
 def _run_incoming_ack_cycle() -> None:
     """DRAFTS (never sends) a generic acknowledgment for incoming SBI-domain

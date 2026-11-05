@@ -223,6 +223,21 @@ export default function Dashboard() {
   const relativeSync = useRelativeTime(data?.lastSynced);
   const incomingLive = useIncomingLive();
 
+  // The Incoming view reads only the mailbox, so a Calling Sheet failure on
+  // the Outgoing side must not block it.
+  if (view === "incoming" && (error || !data) && !isLoading) {
+    return (
+      <div>
+        <PageHeader
+          title="Dashboard"
+          subtitle="What's arriving in the connected inbox, and how much of it could be automated."
+          action={<ViewToggle view={view} onChange={setView} />}
+        />
+        <IncomingSection live={incomingLive} />
+      </div>
+    );
+  }
+
   if (isLoading) return <LoadingBlock />;
 
   if (error || !data) {
@@ -237,7 +252,8 @@ export default function Dashboard() {
           subtitle={errorMsg}
           icon={AlertTriangle}
         />
-        <div className="mt-4 flex justify-center">
+        <div className="mt-4 flex items-center justify-center gap-3">
+          <ViewToggle view={view} onChange={setView} />
           <button
             type="button"
             onClick={() => queryClient.invalidateQueries({ queryKey: ["dashboard"] })}

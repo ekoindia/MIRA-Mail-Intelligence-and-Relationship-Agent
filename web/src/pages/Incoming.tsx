@@ -8,6 +8,7 @@ import {
   Card, CardHeader, Button, Badge, Toggle, EmptyState, LoadingBlock, Table, Th, Td,
 } from "../components/ui";
 import IncomingAckDashboard from "../components/IncomingAckDashboard";
+import ReplyDraftLearning from "../components/ReplyDraftLearning";
 import IncomingMailBreakdown from "../components/IncomingMailBreakdown";
 
 interface AutomationSummary {
@@ -429,6 +430,10 @@ export default function IncomingSection({ live }: { live: IncomingLive }) {
 
           <div className="mt-6">
             <IncomingAckDashboard />
+          </div>
+
+          <div className="mt-6">
+            <ReplyDraftLearning />
           </div>
 
           <div className="mt-6">

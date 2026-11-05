@@ -351,6 +351,28 @@ def ack_summary(user: dict = Depends(get_current_user)):
     }
 
 
+@router.get("/reply-drafts/summary")
+def reply_drafts_summary(user: dict = Depends(get_current_user)):
+    """What happened to each ack draft: sent as-is / edited / replied
+    separately / not used, per template (services/reply_learning_service)."""
+    from services.reply_learning_service import summary_by_template
+
+    return summary_by_template()
+
+
+@router.get("/reply-drafts/detail")
+def reply_drafts_detail(
+    template: str | None = Query(None),
+    outcome: str | None = Query(None, pattern="^(pending|sent_as_is|edited|replied_separately|not_used)$"),
+    page: int = Query(1, ge=1),
+    pageSize: int = Query(20, ge=1, le=100),
+    user: dict = Depends(get_current_user),
+):
+    from services.reply_learning_service import detail
+
+    return detail(template=template, outcome=outcome, page=page, page_size=pageSize)
+
+
 @router.get("/ack-detail")
 def ack_detail(
     category: str | None = Query(None),

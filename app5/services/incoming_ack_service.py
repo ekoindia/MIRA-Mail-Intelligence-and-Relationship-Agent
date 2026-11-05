@@ -72,6 +72,7 @@ from database.db import get_db
 from database.incoming_models import IncomingAttachment, IncomingEmail, IncomingReplyTemplate
 from services import gmail_service as gs
 from services.incoming_service import _sender_email
+from services.reply_learning_service import record_ack_draft
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -550,6 +551,7 @@ def create_ack_drafts(max_items: int = 25, since=None) -> dict:
                     thread_id=row.gmail_thread_id,
                 )
                 row.ack_draft_id = draft_id
+                record_ack_draft(db, row, tpl, template_category, signature, draft_id)
                 summary["drafted"] += 1
         except Exception as exc:  # noqa: BLE001
             logger.error("Ack draft failed for incoming %s: %s", cid, exc)
