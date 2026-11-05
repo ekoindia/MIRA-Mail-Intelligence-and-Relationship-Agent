@@ -10,7 +10,7 @@ export interface SuggestionItem {
   description: string;
   severity: "info" | "warning" | "critical";
   canAutoFix: boolean;
-  status: "pending" | "applied" | "dismissed" | "failed";
+  status: "pending" | "applied" | "dismissed" | "failed" | "resolved";
   detectedAt: string;
   resolvedAt: string | null;
   resolvedByUsername: string | null;
@@ -28,7 +28,26 @@ const STATUS_TONE: Record<string, "slate" | "green" | "red"> = {
   applied: "green",
   dismissed: "slate",
   failed: "red",
+  resolved: "green",
 };
+
+const REASON: Record<string, string> = {
+  data_dup_csp: "The Calling Sheet check found one CSP ID on more than one row.",
+  data_sheet_unreadable: "MIRA tried to read the Calling Sheet and couldn't.",
+  send_unrecorded: "Mail went out for a report today, but its run wasn't saved.",
+  template_fk_null: "A digest has no email template linked, so it can't be drafted.",
+  duplicate_draft_batch: "The same template was drafted more than once today.",
+  incoming_new_category: "Many incoming mails share a subject no reply category covers.",
+  incoming_low_confidence: "A reply category keeps matching incoming mail with low confidence.",
+  incoming_ingest_error: "Some incoming mails were fetched but couldn't be processed.",
+};
+
+function formatWhen(iso: string | null): string {
+  if (!iso) return "";
+  return new Date(iso).toLocaleString("en-IN", {
+    day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true,
+  });
+}
 
 export function SuggestionRow({ suggestion, onMutated }: { suggestion: SuggestionItem; onMutated: () => void }) {
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +81,17 @@ export function SuggestionRow({ suggestion, onMutated }: { suggestion: Suggestio
             <Badge tone={STATUS_TONE[suggestion.status] ?? "slate"}>{suggestion.status}</Badge>
             <span className="text-sm font-semibold text-ink-900">{suggestion.title}</span>
           </div>
+          <p className="mt-1.5 text-xs text-ink-500">
+            <span className="font-semibold text-ink-700">Detected:</span> {formatWhen(suggestion.detectedAt)}
+            {resolved && suggestion.resolvedAt && (
+              <> · <span className="font-semibold text-ink-700">{suggestion.status}:</span> {formatWhen(suggestion.resolvedAt)}</>
+            )}
+          </p>
+          {REASON[suggestion.category] && (
+            <p className="mt-1 text-xs text-ink-500">
+              <span className="font-semibold text-ink-700">Reason:</span> {REASON[suggestion.category]}
+            </p>
+          )}
           <p className="mt-1.5 text-xs text-ink-600">{suggestion.description}</p>
           {resolved && suggestion.resultDetail && (
             <p className="mt-1.5 text-xs text-ink-400">

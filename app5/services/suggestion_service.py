@@ -25,11 +25,16 @@ from services import incoming_service
 
 _FREQUENCIES = ("Daily", "Weekly", "Monthly")
 
+# The feed restarted clean on 5 Nov 2026 00:00 IST (stored timestamps are
+# naive UTC). Older rows are hidden, and a problem still present today is
+# raised again as a fresh suggestion instead of hiding behind an old one.
+FEED_START_UTC = datetime(2026, 11, 4, 18, 30)
+
 
 def _upsert(db, *, category, title, description, severity, entity_type, entity_id,
             fingerprint, can_auto_fix, proposed_action=None) -> None:
     existing = db.query(Suggestion).filter(Suggestion.fingerprint == fingerprint).first()
-    if existing and existing.status == "pending":
+    if existing and existing.status == "pending" and existing.detected_at >= FEED_START_UTC:
         return  # already open, nothing new to say
     if existing:
         db.delete(existing)  # previously resolved/dismissed — a fresh occurrence supersedes it
@@ -210,15 +215,147 @@ def _detect_incoming_ingest_errors(db) -> None:
     )
 
 
+def _auto_resolve(db, category: str, still_open: set[str], note: str) -> None:
+    """Closes the loop: a pending suggestion whose problem is no longer
+    detected is marked resolved on its own, so the feed shows what got fixed
+    and when, not just what broke."""
+    for s in db.query(Suggestion).filter(Suggestion.category == category, Suggestion.status == "pending").all():
+        if s.fingerprint not in still_open:
+            s.status = "resolved"
+            s.result_detail = f"{note} (checked {datetime.now():%d %b %Y, %I:%M %p})."
+            s.resolved_at = datetime.utcnow()
+            s.resolved_by_username = "auto-check"
+
+
+def _load_sheet_for_checks(db):
+    """Reads the Calling Sheet for the data-quality checks. A sheet MIRA
+    can't parse (renamed column, lost Google connection) is itself the most
+    urgent finding: every report fails on it at the next send."""
+    from services.calling_sheet_service import CallingSheetError, load_calling_sheet
+
+    fingerprint = "data_sheet_unreadable"
+    try:
+        df = load_calling_sheet()
+    except CallingSheetError as exc:
+        _upsert(
+            db, category="data_sheet_unreadable",
+            title="MIRA can't read the Calling Sheet",
+            description=(
+                f"Every report will fail at its next send until this is fixed: {exc}. "
+                "If a column was renamed, ask the sheet owner to restore the old header or tell the MIRA "
+                "maintainer the new name; if Google is disconnected, reconnect it in Settings."
+            ),
+            severity="critical", entity_type="CallingSheet", entity_id=None,
+            fingerprint=fingerprint, can_auto_fix=False,
+        )
+        return None
+    except Exception:  # noqa: BLE001 — a network blip shouldn't raise a false alarm
+        return None
+    _auto_resolve(db, "data_sheet_unreadable", set(), "The Calling Sheet is readable again")
+    return df
+
+
+def _detect_duplicate_csp_ids(db, df) -> None:
+    """One CSP ID on more than one row means one of those rows is wrong. MIRA
+    keeps the higher loan-lead count and drops the other row's leads, so the
+    sheet has to be corrected at the source by the CSP's RM."""
+    import pandas as pd
+
+    codes = df["csp_code"].astype(str).str.strip()
+    # Assign before filtering: assigning a Series onto an empty frame adopts the
+    # Series' whole index, which would flag every CSP when there are no duplicates.
+    mask = (codes != "") & (codes.str.lower() != "nan") & codes.duplicated(keep=False)
+    dup = df.assign(_code=codes)[mask]
+    open_now: set[str] = set()
+
+    def _val(v) -> str:
+        return "" if pd.isna(v) else str(v).strip()
+
+    for code, rows in dup.groupby("_code"):
+        fingerprint = f"data_dup_csp:{code}"
+        open_now.add(fingerprint)
+        listed = "; ".join(
+            f"{_val(r.csp_name) or '(no name)'} — {_val(r.branch_name) or '?'} ({_val(r.branch_code) or '?'})"
+            for r in rows.itertuples()
+        )
+        rm_emails = sorted({_val(e) for e in rows["rm_email"] if _val(e)})
+        dc_emails = sorted({_val(e) for e in rows["dc_email"] if _val(e)})
+        notify = ", ".join(rm_emails) or "no RM email in the sheet"
+        cc = f" (cc DC: {', '.join(dc_emails)})" if dc_emails else ""
+        _upsert(
+            db, category="data_dup_csp",
+            title=f"CSP ID {code} is on {len(rows)} rows of the Calling Sheet",
+            description=(
+                f"Rows: {listed}. Only one can be correct; until the sheet is fixed MIRA counts the row "
+                f"with more loan leads and drops the other. Ask the RM to correct it: {notify}{cc}. "
+                f'Suggested message: "CSP ID {code} appears for {listed} in the Calling Sheet. '
+                f'Please confirm the correct CSP ID for each and update the sheet." '
+                f"This closes on its own once the sheet no longer repeats the ID."
+            ),
+            severity="warning", entity_type="CallingSheet", entity_id=None,
+            fingerprint=fingerprint, can_auto_fix=False,
+        )
+    _auto_resolve(db, "data_dup_csp", open_now, "Fixed in the Calling Sheet: the CSP ID is no longer repeated")
+
+
+def _detect_unrecorded_sends(db) -> None:
+    """A report the duplicate-send guard saw send mail today, with no job
+    recorded for it, is the 2026-11-04 failure shape: the mail went out but
+    its run rolled back. The guard stops a re-send; this makes sure a person
+    checks Gmail Sent and the recipients."""
+    from services import send_guard
+    from database.models import ReportUpload
+
+    started = send_guard.autosend_reports_started_today()
+    if not started:
+        return
+    since = datetime.utcnow() - timedelta(hours=24)
+    recorded = {
+        name for (name,) in (
+            db.query(ReportMaster.report_name)
+            .join(ReportUpload, ReportUpload.report_master_id == ReportMaster.id)
+            .join(DistributionJob, DistributionJob.upload_id == ReportUpload.id)
+            .filter(DistributionJob.created_at >= since)
+            .all()
+        )
+    }
+    today = datetime.now().date().isoformat()
+    for name in sorted(started):
+        is_recorded = name in recorded or (
+            name.startswith("SBI Kiosk") and any(r.startswith("SBI Kiosk") for r in recorded)
+        )
+        if is_recorded or name.startswith("Weekly digest"):
+            continue
+        _upsert(
+            db, category="send_unrecorded",
+            title=f"'{name}' sent mail today but its run wasn't saved",
+            description=(
+                "Mail for this report left Gmail, but its job and delivery rows were rolled back, so "
+                "Delivery Logs won't show it. MIRA will not send it again today. Check Gmail Sent for this "
+                "report and the backend log for the error before any manual resend."
+            ),
+            severity="critical", entity_type="ReportMaster", entity_id=None,
+            fingerprint=f"send_unrecorded:{today}:{name}", can_auto_fix=False,
+        )
+
+
 def run_suggestion_scan(db) -> int:
     """Runs every detector. Returns the number of open (pending) suggestions after the scan."""
     _detect_broken_digest_templates(db)
     _detect_duplicate_same_day_drafts(db)
+    _detect_unrecorded_sends(db)
+    df = _load_sheet_for_checks(db)
+    if df is not None:
+        _detect_duplicate_csp_ids(db, df)
     _detect_incoming_new_categories(db)
     _detect_incoming_low_confidence_categories(db)
     _detect_incoming_ingest_errors(db)
     db.flush()  # session is autoflush=False (database/db.py) — make just-added rows visible to the count below
-    return db.query(Suggestion).filter(Suggestion.status == "pending").count()
+    return (
+        db.query(Suggestion)
+        .filter(Suggestion.status == "pending", Suggestion.detected_at >= FEED_START_UTC)
+        .count()
+    )
 
 
 def run_scheduled_suggestion_scan() -> None:

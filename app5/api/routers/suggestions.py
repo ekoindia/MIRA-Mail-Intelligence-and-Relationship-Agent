@@ -5,9 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from api.auth import get_current_user
 from database.db import get_db
 from database.suggestion_models import Suggestion
-from services.suggestion_service import approve_suggestion, dismiss_suggestion, run_suggestion_scan
+from services.suggestion_service import FEED_START_UTC, approve_suggestion, dismiss_suggestion, run_suggestion_scan
 
 router = APIRouter(prefix="/api/suggestions", tags=["suggestions"])
+
+
+def _utc_iso(dt) -> str | None:
+    # Stored as naive UTC; without the "Z" the browser reads it as local time
+    # and shows IST users a timestamp 5h30m early.
+    return dt.isoformat() + "Z" if dt else None
 
 
 def _to_dict(s: Suggestion) -> dict:
@@ -15,8 +21,8 @@ def _to_dict(s: Suggestion) -> dict:
         "id": s.id, "category": s.category, "title": s.title, "description": s.description,
         "severity": s.severity, "entityType": s.entity_type, "entityId": s.entity_id,
         "canAutoFix": s.can_auto_fix, "status": s.status,
-        "detectedAt": s.detected_at.isoformat() if s.detected_at else None,
-        "resolvedAt": s.resolved_at.isoformat() if s.resolved_at else None,
+        "detectedAt": _utc_iso(s.detected_at),
+        "resolvedAt": _utc_iso(s.resolved_at),
         "resolvedByUsername": s.resolved_by_username, "resultDetail": s.result_detail,
     }
 
@@ -24,7 +30,7 @@ def _to_dict(s: Suggestion) -> dict:
 @router.get("")
 def list_suggestions(category_prefix: str | None = None, user: dict = Depends(get_current_user)):
     with get_db() as db:
-        q = db.query(Suggestion).filter(Suggestion.status != "dismissed")
+        q = db.query(Suggestion).filter(Suggestion.status != "dismissed", Suggestion.detected_at >= FEED_START_UTC)
         if category_prefix:
             q = q.filter(Suggestion.category.like(f"{category_prefix}%"))
         rows = q.order_by(Suggestion.detected_at.desc()).all()
